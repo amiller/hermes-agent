@@ -10,14 +10,17 @@ Resolution order for text tasks:
   3. Custom endpoint (OPENAI_BASE_URL + OPENAI_API_KEY)
   4. Codex OAuth (Responses API via chatgpt.com with gpt-5.3-codex,
      wrapped to look like a chat.completions client)
-  5. Direct API-key providers (z.ai/GLM, Kimi/Moonshot, MiniMax, MiniMax-CN)
+  5. Anthropic (ANTHROPIC_TOKEN or ANTHROPIC_API_KEY, wrapped to look
+     like a chat.completions client)
+  6. Direct API-key providers (z.ai/GLM, Kimi/Moonshot, MiniMax, MiniMax-CN)
      — checked via PROVIDER_REGISTRY entries with auth_type='api_key'
-  6. None
+  7. None
 
 Resolution order for vision/multimodal tasks:
   1. OpenRouter
   2. Nous Portal
-  3. None  (custom endpoints can't substitute for Gemini multimodal)
+  3. Anthropic (Claude supports vision natively)
+  4. None
 """
 
 import json
@@ -245,6 +248,130 @@ class AsyncCodexAuxiliaryClient:
         self.base_url = sync_wrapper.base_url
 
 
+_ANTHROPIC_AUX_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _read_anthropic_token() -> Optional[str]:
+    """Return an Anthropic API key or OAuth token if available."""
+    for var in ("ANTHROPIC_TOKEN", "ANTHROPIC_API_KEY"):
+        val = os.getenv(var, "").strip()
+        if val:
+            return val
+    return None
+
+
+class _AnthropicCompletionsAdapter:
+    """Shim that accepts chat.completions.create() kwargs and routes
+    them through the Anthropic Messages API."""
+
+    def __init__(self, client, model: str):
+        self._client = client
+        self._model = model
+
+    def create(self, **kwargs) -> Any:
+        from agent.anthropic_adapter import (
+            convert_messages_to_anthropic,
+            convert_tools_to_anthropic,
+        )
+
+        messages = kwargs.get("messages", [])
+        model = kwargs.get("model", self._model)
+        system, ant_messages = convert_messages_to_anthropic(messages)
+        tools = convert_tools_to_anthropic(kwargs.get("tools") or [])
+        max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens") or 4096
+
+        api_kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": ant_messages,
+            "max_tokens": max_tokens,
+        }
+        if system:
+            api_kwargs["system"] = system
+        if tools:
+            api_kwargs["tools"] = tools
+
+        resp = self._client.messages.create(**api_kwargs)
+
+        # Build OpenAI-shaped response
+        text_parts = []
+        tool_calls_raw = []
+        for block in resp.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls_raw.append(SimpleNamespace(
+                    id=block.id,
+                    type="function",
+                    function=SimpleNamespace(
+                        name=block.name,
+                        arguments=json.dumps(block.input),
+                    ),
+                ))
+
+        content = "\n".join(text_parts).strip() or None
+        message = SimpleNamespace(
+            role="assistant",
+            content=content,
+            tool_calls=tool_calls_raw or None,
+        )
+        choice = SimpleNamespace(
+            index=0,
+            message=message,
+            finish_reason="tool_calls" if tool_calls_raw else "stop",
+        )
+        usage = SimpleNamespace(
+            prompt_tokens=resp.usage.input_tokens,
+            completion_tokens=resp.usage.output_tokens,
+            total_tokens=resp.usage.input_tokens + resp.usage.output_tokens,
+        )
+        return SimpleNamespace(choices=[choice], model=model, usage=usage)
+
+
+class _AnthropicChatShim:
+    def __init__(self, adapter: _AnthropicCompletionsAdapter):
+        self.completions = adapter
+
+
+class AnthropicAuxiliaryClient:
+    """OpenAI-client-compatible wrapper for Anthropic Messages API.
+
+    Consumers call client.chat.completions.create(**kwargs) as normal.
+    """
+
+    def __init__(self, client, model: str):
+        self._client = client
+        adapter = _AnthropicCompletionsAdapter(client, model)
+        self.chat = _AnthropicChatShim(adapter)
+        self.api_key = "anthropic"
+        self.base_url = "https://api.anthropic.com"
+
+    def close(self):
+        self._client.close()
+
+
+class _AsyncAnthropicCompletionsAdapter:
+    def __init__(self, sync_adapter: _AnthropicCompletionsAdapter):
+        self._sync = sync_adapter
+
+    async def create(self, **kwargs) -> Any:
+        import asyncio
+        return await asyncio.to_thread(self._sync.create, **kwargs)
+
+
+class _AsyncAnthropicChatShim:
+    def __init__(self, adapter: _AsyncAnthropicCompletionsAdapter):
+        self.completions = adapter
+
+
+class AsyncAnthropicAuxiliaryClient:
+    def __init__(self, sync_wrapper: AnthropicAuxiliaryClient):
+        sync_adapter = sync_wrapper.chat.completions
+        async_adapter = _AsyncAnthropicCompletionsAdapter(sync_adapter)
+        self.chat = _AsyncAnthropicChatShim(async_adapter)
+        self.api_key = sync_wrapper.api_key
+        self.base_url = sync_wrapper.base_url
+
+
 def _read_nous_auth() -> Optional[dict]:
     """Read and validate ~/.hermes/auth.json for an active Nous provider.
 
@@ -379,12 +506,20 @@ def get_text_auxiliary_client() -> Tuple[Optional[OpenAI], Optional[str]]:
         real_client = OpenAI(api_key=codex_token, base_url=_CODEX_AUX_BASE_URL)
         return CodexAuxiliaryClient(real_client, _CODEX_AUX_MODEL), _CODEX_AUX_MODEL
 
-    # 5. Direct API-key providers (z.ai/GLM, Kimi/Moonshot, MiniMax, etc.)
+    # 5. Anthropic (ANTHROPIC_TOKEN or ANTHROPIC_API_KEY)
+    ant_token = _read_anthropic_token()
+    if ant_token:
+        from agent.anthropic_adapter import build_anthropic_client
+        logger.debug("Auxiliary text client: Anthropic (%s)", _ANTHROPIC_AUX_MODEL)
+        client = build_anthropic_client(ant_token)
+        return AnthropicAuxiliaryClient(client, _ANTHROPIC_AUX_MODEL), _ANTHROPIC_AUX_MODEL
+
+    # 6. Direct API-key providers (z.ai/GLM, Kimi/Moonshot, MiniMax, etc.)
     api_client, api_model = _resolve_api_key_provider()
     if api_client is not None:
         return api_client, api_model
 
-    # 6. Nothing available
+    # 7. Nothing available
     logger.debug("Auxiliary text client: none available")
     return None, None
 
@@ -404,6 +539,9 @@ def get_async_text_auxiliary_client():
 
     if isinstance(sync_client, CodexAuxiliaryClient):
         return AsyncCodexAuxiliaryClient(sync_client), model
+
+    if isinstance(sync_client, AnthropicAuxiliaryClient):
+        return AsyncAnthropicAuxiliaryClient(sync_client), model
 
     async_kwargs = {
         "api_key": sync_client.api_key,
@@ -438,7 +576,15 @@ def get_vision_auxiliary_client() -> Tuple[Optional[OpenAI], Optional[str]]:
             _NOUS_MODEL,
         )
 
-    # 3. Nothing suitable
+    # 3. Anthropic (Claude supports vision natively)
+    ant_token = _read_anthropic_token()
+    if ant_token:
+        from agent.anthropic_adapter import build_anthropic_client
+        logger.debug("Auxiliary vision client: Anthropic (%s)", _ANTHROPIC_AUX_MODEL)
+        client = build_anthropic_client(ant_token)
+        return AnthropicAuxiliaryClient(client, _ANTHROPIC_AUX_MODEL), _ANTHROPIC_AUX_MODEL
+
+    # 4. Nothing suitable
     logger.debug("Auxiliary vision client: none available")
     return None, None
 
