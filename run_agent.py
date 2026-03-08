@@ -244,13 +244,16 @@ class AIAgent:
         self.base_url = base_url or OPENROUTER_BASE_URL
         provider_name = provider.strip().lower() if isinstance(provider, str) and provider.strip() else None
         self.provider = provider_name or "openrouter"
-        if api_mode in {"chat_completions", "codex_responses"}:
+        if api_mode in {"chat_completions", "codex_responses", "anthropic_messages"}:
             self.api_mode = api_mode
         elif self.provider == "openai-codex":
             self.api_mode = "codex_responses"
         elif (provider_name is None) and "chatgpt.com/backend-api/codex" in self.base_url.lower():
             self.api_mode = "codex_responses"
             self.provider = "openai-codex"
+        elif self.provider == "anthropic" or (provider_name is None and "api.anthropic.com" in self.base_url.lower()):
+            self.api_mode = "anthropic_messages"
+            self.provider = "anthropic"
         else:
             self.api_mode = "chat_completions"
 
@@ -359,52 +362,67 @@ class AIAgent:
                 ]:
                     logging.getLogger(quiet_logger).setLevel(logging.ERROR)
         
-        # Initialize OpenAI client - defaults to OpenRouter
-        client_kwargs = {}
-        
-        # Default to OpenRouter if no base_url provided
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        else:
-            client_kwargs["base_url"] = OPENROUTER_BASE_URL
-        
-        # Handle API key - OpenRouter is the primary provider
-        if api_key:
-            client_kwargs["api_key"] = api_key
-        else:
-            # Primary: OPENROUTER_API_KEY, fallback to direct provider keys
-            client_kwargs["api_key"] = os.getenv("OPENROUTER_API_KEY", "")
-        
-        # OpenRouter app attribution — shows hermes-agent in rankings/analytics
-        effective_base = client_kwargs.get("base_url", "")
-        if "openrouter" in effective_base.lower():
-            client_kwargs["default_headers"] = {
-                "HTTP-Referer": "https://github.com/NousResearch/hermes-agent",
-                "X-OpenRouter-Title": "Hermes Agent",
-                "X-OpenRouter-Categories": "productivity,cli-agent",
-            }
-        elif "api.kimi.com" in effective_base.lower():
-            # Kimi Code API requires a recognized coding-agent User-Agent
-            # (see https://github.com/MoonshotAI/kimi-cli)
-            client_kwargs["default_headers"] = {
-                "User-Agent": "KimiCLI/1.0",
-            }
-        
-        self._client_kwargs = client_kwargs  # stored for rebuilding after interrupt
-        try:
-            self.client = OpenAI(**client_kwargs)
+        # Initialize LLM client
+        self._anthropic_client = None
+
+        if self.api_mode == "anthropic_messages":
+            from agent.anthropic_adapter import build_anthropic_client
+            effective_key = api_key or os.getenv("ANTHROPIC_TOKEN", "") or os.getenv("ANTHROPIC_API_KEY", "")
+            self._anthropic_api_key = effective_key
+            self._anthropic_client = build_anthropic_client(effective_key, base_url if base_url and "anthropic" in base_url else None)
+            # Still create a dummy OpenAI client for code paths that reference self.client
+            self.client = None
+            self._client_kwargs = {}
             if not self.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {self.model}")
-                if base_url:
-                    print(f"🔗 Using custom base URL: {base_url}")
-                # Always show API key info (masked) for debugging auth issues
-                key_used = client_kwargs.get("api_key", "none")
-                if key_used and key_used != "dummy-key" and len(key_used) > 12:
-                    print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
-                else:
-                    print(f"⚠️  Warning: API key appears invalid or missing (got: '{key_used[:20] if key_used else 'none'}...')")
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+                print(f"🤖 AI Agent initialized with model: {self.model} (Anthropic native)")
+                if effective_key and len(effective_key) > 12:
+                    print(f"🔑 Using token: {effective_key[:8]}...{effective_key[-4:]}")
+        else:
+            client_kwargs = {}
+
+            # Default to OpenRouter if no base_url provided
+            if base_url:
+                client_kwargs["base_url"] = base_url
+            else:
+                client_kwargs["base_url"] = OPENROUTER_BASE_URL
+
+            # Handle API key - OpenRouter is the primary provider
+            if api_key:
+                client_kwargs["api_key"] = api_key
+            else:
+                # Primary: OPENROUTER_API_KEY, fallback to direct provider keys
+                client_kwargs["api_key"] = os.getenv("OPENROUTER_API_KEY", "")
+
+            # OpenRouter app attribution — shows hermes-agent in rankings/analytics
+            effective_base = client_kwargs.get("base_url", "")
+            if "openrouter" in effective_base.lower():
+                client_kwargs["default_headers"] = {
+                    "HTTP-Referer": "https://github.com/NousResearch/hermes-agent",
+                    "X-OpenRouter-Title": "Hermes Agent",
+                    "X-OpenRouter-Categories": "productivity,cli-agent",
+                }
+            elif "api.kimi.com" in effective_base.lower():
+                # Kimi Code API requires a recognized coding-agent User-Agent
+                # (see https://github.com/MoonshotAI/kimi-cli)
+                client_kwargs["default_headers"] = {
+                    "User-Agent": "KimiCLI/1.0",
+                }
+
+            self._client_kwargs = client_kwargs  # stored for rebuilding after interrupt
+            try:
+                self.client = OpenAI(**client_kwargs)
+                if not self.quiet_mode:
+                    print(f"🤖 AI Agent initialized with model: {self.model}")
+                    if base_url:
+                        print(f"🔗 Using custom base URL: {base_url}")
+                    # Always show API key info (masked) for debugging auth issues
+                    key_used = client_kwargs.get("api_key", "none")
+                    if key_used and key_used != "dummy-key" and len(key_used) > 12:
+                        print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
+                    else:
+                        print(f"⚠️  Warning: API key appears invalid or missing (got: '{key_used[:20] if key_used else 'none'}...')")
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
         
         # Get available tools with filtering
         self.tools = get_tool_definitions(
@@ -2121,6 +2139,8 @@ class AIAgent:
             try:
                 if self.api_mode == "codex_responses":
                     result["response"] = self._run_codex_stream(api_kwargs)
+                elif self.api_mode == "anthropic_messages":
+                    result["response"] = self._anthropic_client.messages.create(**api_kwargs)
                 else:
                     result["response"] = self.client.chat.completions.create(**api_kwargs)
             except Exception as e:
@@ -2133,12 +2153,19 @@ class AIAgent:
             if self._interrupt_requested:
                 # Force-close the HTTP connection to stop token generation
                 try:
-                    self.client.close()
+                    if self.api_mode == "anthropic_messages":
+                        self._anthropic_client.close()
+                    else:
+                        self.client.close()
                 except Exception:
                     pass
                 # Rebuild the client for future calls (cheap, no network)
                 try:
-                    self.client = OpenAI(**self._client_kwargs)
+                    if self.api_mode == "anthropic_messages":
+                        from agent.anthropic_adapter import build_anthropic_client
+                        self._anthropic_client = build_anthropic_client(self._anthropic_api_key)
+                    else:
+                        self.client = OpenAI(**self._client_kwargs)
                 except Exception:
                     pass
                 raise InterruptedError("Agent interrupted during API call")
@@ -2148,6 +2175,16 @@ class AIAgent:
 
     def _build_api_kwargs(self, api_messages: list) -> dict:
         """Build the keyword arguments dict for the active API mode."""
+        if self.api_mode == "anthropic_messages":
+            from agent.anthropic_adapter import build_anthropic_kwargs
+            return build_anthropic_kwargs(
+                model=self.model,
+                messages=api_messages,
+                tools=self.tools,
+                max_tokens=self.max_tokens,
+                reasoning_config=self.reasoning_config,
+            )
+
         if self.api_mode == "codex_responses":
             instructions = ""
             payload_messages = api_messages
@@ -3192,6 +3229,17 @@ class AIAgent:
                         elif len(output_items) == 0:
                             response_invalid = True
                             error_details.append("response.output is empty")
+                    elif self.api_mode == "anthropic_messages":
+                        content_blocks = getattr(response, "content", None) if response is not None else None
+                        if response is None:
+                            response_invalid = True
+                            error_details.append("response is None")
+                        elif not isinstance(content_blocks, list):
+                            response_invalid = True
+                            error_details.append("response.content is not a list")
+                        elif len(content_blocks) == 0:
+                            response_invalid = True
+                            error_details.append("response.content is empty")
                     else:
                         if response is None or not hasattr(response, 'choices') or response.choices is None or len(response.choices) == 0:
                             response_invalid = True
@@ -3287,6 +3335,9 @@ class AIAgent:
                             finish_reason = "length"
                         else:
                             finish_reason = "stop"
+                    elif self.api_mode == "anthropic_messages":
+                        stop_reason_map = {"end_turn": "stop", "tool_use": "tool_calls", "max_tokens": "length", "stop_sequence": "stop"}
+                        finish_reason = stop_reason_map.get(response.stop_reason, "stop")
                     else:
                         finish_reason = response.choices[0].finish_reason
                     
@@ -3325,7 +3376,7 @@ class AIAgent:
                     
                     # Track actual token usage from response for context management
                     if hasattr(response, 'usage') and response.usage:
-                        if self.api_mode == "codex_responses":
+                        if self.api_mode in ("codex_responses", "anthropic_messages"):
                             prompt_tokens = getattr(response.usage, 'input_tokens', 0) or 0
                             completion_tokens = getattr(response.usage, 'output_tokens', 0) or 0
                             total_tokens = (
@@ -3624,6 +3675,9 @@ class AIAgent:
             try:
                 if self.api_mode == "codex_responses":
                     assistant_message, finish_reason = self._normalize_codex_response(response)
+                elif self.api_mode == "anthropic_messages":
+                    from agent.anthropic_adapter import normalize_anthropic_response
+                    assistant_message, finish_reason = normalize_anthropic_response(response)
                 else:
                     assistant_message = response.choices[0].message
                 

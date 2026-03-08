@@ -53,6 +53,11 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "MiniMax-M2.5-highspeed",
         "MiniMax-M2.1",
     ],
+    "anthropic": [
+        "claude-opus-4-20250514",
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-5-20251001",
+    ],
 }
 
 _PROVIDER_LABELS = {
@@ -63,6 +68,7 @@ _PROVIDER_LABELS = {
     "kimi-coding": "Kimi / Moonshot",
     "minimax": "MiniMax",
     "minimax-cn": "MiniMax (China)",
+    "anthropic": "Anthropic",
     "custom": "custom endpoint",
 }
 
@@ -75,6 +81,7 @@ _PROVIDER_ALIASES = {
     "moonshot": "kimi-coding",
     "minimax-china": "minimax-cn",
     "minimax_cn": "minimax-cn",
+    "claude": "anthropic",
 }
 
 

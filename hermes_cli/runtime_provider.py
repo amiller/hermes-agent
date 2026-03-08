@@ -148,6 +148,18 @@ def resolve_runtime_provider(
             "requested_provider": requested_provider,
         }
 
+    # Anthropic (native Messages API)
+    if provider == "anthropic":
+        creds = resolve_api_key_provider_credentials(provider)
+        return {
+            "provider": "anthropic",
+            "api_mode": "anthropic_messages",
+            "base_url": creds.get("base_url", "").rstrip("/"),
+            "api_key": creds.get("api_key", ""),
+            "source": creds.get("source", "env"),
+            "requested_provider": requested_provider,
+        }
+
     # API-key providers (z.ai/GLM, Kimi, MiniMax, MiniMax-CN)
     pconfig = PROVIDER_REGISTRY.get(provider)
     if pconfig and pconfig.auth_type == "api_key":
