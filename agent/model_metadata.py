@@ -41,7 +41,6 @@ DEFAULT_CONTEXT_LENGTHS = {
     "anthropic/claude-sonnet-4": 200000,
     "anthropic/claude-sonnet-4-20250514": 200000,
     "anthropic/claude-haiku-4.5": 200000,
-    # Bare Anthropic model names (native provider)
     "claude-opus-4-20250514": 200000,
     "claude-sonnet-4-20250514": 200000,
     "claude-haiku-4-5-20251001": 200000,

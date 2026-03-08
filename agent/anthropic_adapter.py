@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import anthropic
 from httpx import Timeout
 
+THINKING_BUDGET = {"xhigh": 32000, "high": 16000, "medium": 8000, "low": 4000}
+
 
 def build_anthropic_client(api_key: str, base_url: str = None) -> anthropic.Anthropic:
     """Create an Anthropic client, auto-detecting setup-tokens vs API keys."""
@@ -161,12 +163,7 @@ def build_anthropic_kwargs(
     if reasoning_config and isinstance(reasoning_config, dict):
         if reasoning_config.get("enabled") is not False:
             effort = reasoning_config.get("effort", "medium")
-            budget = {
-                "xhigh": 32000,
-                "high": 16000,
-                "medium": 8000,
-                "low": 4000,
-            }.get(effort, 8000)
+            budget = THINKING_BUDGET.get(effort, 8000)
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
             kwargs["max_tokens"] = max(effective_max_tokens, budget + 4096)
 
