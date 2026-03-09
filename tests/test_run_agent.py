@@ -346,6 +346,23 @@ class TestInit:
             )
             assert a._use_prompt_caching is False
 
+    def test_prompt_caching_native_anthropic(self):
+        """Native Anthropic provider should enable prompt caching."""
+        with (
+            patch("run_agent.get_tool_definitions", return_value=[]),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("agent.anthropic_adapter.anthropic.Anthropic"),
+        ):
+            a = AIAgent(
+                api_key="test-key-1234567890",
+                base_url="https://api.anthropic.com/v1/",
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+            )
+            assert a.api_mode == "anthropic_messages"
+            assert a._use_prompt_caching is True
+
     def test_valid_tool_names_populated(self):
         """valid_tool_names should contain names from loaded tools."""
         tools = _make_tool_defs("web_search", "terminal")

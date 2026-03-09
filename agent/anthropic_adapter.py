@@ -58,6 +58,7 @@ def convert_messages_to_anthropic(
 
     Returns (system_prompt, anthropic_messages).
     System messages are extracted since Anthropic takes them as a separate param.
+    system_prompt is a string or list of content blocks (when cache_control present).
     """
     system = None
     result = []
@@ -68,9 +69,14 @@ def convert_messages_to_anthropic(
 
         if role == "system":
             if isinstance(content, list):
-                system = "\n".join(
-                    p["text"] for p in content if p.get("type") == "text"
-                )
+                # Preserve cache_control markers on content blocks
+                has_cache = any(p.get("cache_control") for p in content if isinstance(p, dict))
+                if has_cache:
+                    system = [p for p in content if isinstance(p, dict)]
+                else:
+                    system = "\n".join(
+                        p["text"] for p in content if p.get("type") == "text"
+                    )
             else:
                 system = content
             continue

@@ -524,6 +524,7 @@ def setup_model_provider(config: dict):
         "Kimi / Moonshot (Kimi coding models)",
         "MiniMax (global endpoint)",
         "MiniMax China (mainland China endpoint)",
+        "Anthropic (Claude models, API key or setup-token)",
     ]
     if keep_label:
         provider_choices.append(keep_label)
@@ -811,12 +812,45 @@ def setup_model_provider(config: dict):
             save_env_value("OPENAI_API_KEY", "")
         _update_config_for_provider("minimax-cn", pconfig.inference_base_url)
 
-    # else: provider_idx == 8 (Keep current) — only shown when a provider already exists
+    elif provider_idx == 8:  # Anthropic
+        selected_provider = "anthropic"
+        print()
+        print_header("Anthropic API Key or Setup-Token")
+        from hermes_cli.auth import PROVIDER_REGISTRY
+        pconfig = PROVIDER_REGISTRY["anthropic"]
+        print_info(f"Provider: {pconfig.name}")
+        print_info("Accepts API keys (sk-ant-api-*) or setup-tokens (sk-ant-oat01-*)")
+        print_info("Get an API key at: https://console.anthropic.com/")
+        print_info("Or run 'claude setup-token' to get a setup-token")
+        print()
+
+        existing_key = get_env_value("ANTHROPIC_TOKEN") or get_env_value("ANTHROPIC_API_KEY")
+        if existing_key:
+            print_info(f"Current: {existing_key[:12]}... (configured)")
+            if prompt_yes_no("Update key?", False):
+                api_key = prompt("  Anthropic API key or setup-token", password=True)
+                if api_key:
+                    save_env_value("ANTHROPIC_TOKEN", api_key)
+                    print_success("Anthropic key saved")
+        else:
+            api_key = prompt("  Anthropic API key or setup-token", password=True)
+            if api_key:
+                save_env_value("ANTHROPIC_TOKEN", api_key)
+                print_success("Anthropic key saved")
+            else:
+                print_warning("Skipped - agent won't work without an API key")
+
+        if existing_custom:
+            save_env_value("OPENAI_BASE_URL", "")
+            save_env_value("OPENAI_API_KEY", "")
+        _update_config_for_provider("anthropic", pconfig.inference_base_url)
+
+    # else: provider_idx == 9 (Keep current) — only shown when a provider already exists
 
     # ── OpenRouter API Key for tools (if not already set) ──
     # Tools (vision, web, MoA) use OpenRouter independently of the main provider.
     # Prompt for OpenRouter key if not set and a non-OpenRouter provider was chosen.
-    if selected_provider in ("nous", "openai-codex", "custom", "zai", "kimi-coding", "minimax", "minimax-cn") and not get_env_value("OPENROUTER_API_KEY"):
+    if selected_provider in ("nous", "openai-codex", "custom", "zai", "kimi-coding", "minimax", "minimax-cn", "anthropic") and not get_env_value("OPENROUTER_API_KEY"):
         print()
         print_header("OpenRouter API Key (for tools)")
         print_info("Tools like vision analysis, web search, and MoA use OpenRouter")
@@ -944,6 +978,28 @@ def setup_model_provider(config: dict):
                 save_env_value("LLM_MODEL", minimax_models[model_idx])
             elif model_idx == len(minimax_models):
                 custom = prompt("Enter model name")
+                if custom:
+                    config['model'] = custom
+                    save_env_value("LLM_MODEL", custom)
+            # else: keep current
+        elif selected_provider == "anthropic":
+            anthropic_models = [
+                "claude-sonnet-4-20250514",
+                "claude-opus-4-20250514",
+                "claude-haiku-4-5-20251001",
+            ]
+            model_choices = list(anthropic_models)
+            model_choices.append("Custom model")
+            model_choices.append(f"Keep current ({current_model})")
+
+            keep_idx = len(model_choices) - 1
+            model_idx = prompt_choice("Select default model:", model_choices, keep_idx)
+
+            if model_idx < len(anthropic_models):
+                config['model'] = anthropic_models[model_idx]
+                save_env_value("LLM_MODEL", anthropic_models[model_idx])
+            elif model_idx == len(anthropic_models):
+                custom = prompt("Enter model name (e.g., claude-sonnet-4-20250514)")
                 if custom:
                     config['model'] = custom
                     save_env_value("LLM_MODEL", custom)

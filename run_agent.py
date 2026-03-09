@@ -287,12 +287,10 @@ class AIAgent:
         self.reasoning_config = reasoning_config  # None = use default (medium for OpenRouter)
         self.prefill_messages = prefill_messages or []  # Prefilled conversation turns
         
-        # Anthropic prompt caching: auto-enabled for Claude models via OpenRouter.
-        # Reduces input costs by ~75% on multi-turn conversations by caching the
-        # conversation prefix. Uses system_and_3 strategy (4 breakpoints).
         is_openrouter = "openrouter" in self.base_url.lower()
         is_claude = "claude" in self.model.lower()
-        self._use_prompt_caching = is_openrouter and is_claude
+        is_native_anthropic = self.api_mode == "anthropic_messages"
+        self._use_prompt_caching = (is_openrouter and is_claude) or is_native_anthropic
         self._cache_ttl = "5m"  # Default 5-minute TTL (1.25x write cost)
         
         # Persistent error log -- always writes WARNING+ to ~/.hermes/logs/errors.log
@@ -465,7 +463,8 @@ class AIAgent:
         
         # Show prompt caching status
         if self._use_prompt_caching and not self.quiet_mode:
-            print(f"💾 Prompt caching: ENABLED (Claude via OpenRouter, {self._cache_ttl} TTL)")
+            source = "native Anthropic" if is_native_anthropic else "Claude via OpenRouter"
+            print(f"💾 Prompt caching: ENABLED ({source}, {self._cache_ttl} TTL)")
         
         # Session logging setup - auto-save conversation trajectories for debugging
         self.session_start = datetime.now()
