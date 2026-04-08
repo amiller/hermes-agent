@@ -102,6 +102,11 @@ try:
         _MCP_HTTP_AVAILABLE = True
     except ImportError:
         _MCP_HTTP_AVAILABLE = False
+    try:
+        from mcp.client.sse import sse_client
+        _MCP_SSE_AVAILABLE = True
+    except ImportError:
+        _MCP_SSE_AVAILABLE = False
     # Prefer the non-deprecated API (mcp >= 1.24.0); fall back to the
     # deprecated wrapper for older SDK versions.
     try:
@@ -778,7 +783,8 @@ class MCPServerTask:
     runs inside one asyncio Task so that anyio cancel-scopes created by
     the transport client are entered and exited in the same Task context.
 
-    Supports both stdio and HTTP/StreamableHTTP transports.
+    Supports both stdio and HTTP/StreamableHTTP transports,
+    as well as legacy SSE (Server-Sent Events) transport.
     """
 
     __slots__ = (
@@ -812,6 +818,21 @@ class MCPServerTask:
     def _is_http(self) -> bool:
         """Check if this server uses HTTP transport."""
         return "url" in self._config
+
+    def _is_sse(self) -> bool:
+        """Check if this server should use SSE transport.
+
+        Explicitly opted in via ``transport: sse`` in config, or
+        auto-detected when the URL path ends with ``/sse``.
+        """
+        if self._config.get("transport", "").lower() == "sse":
+            return True
+        url = self._config.get("url", "")
+        if not url:
+            return False
+        from urllib.parse import urlparse
+        path = urlparse(url).path
+        return path.rstrip("/").endswith("/sse")
 
     # ----- Dynamic tool discovery (notifications/tools/list_changed) -----
 
@@ -1070,6 +1091,42 @@ class MCPServerTask:
                             "tearing down legacy HTTP session", self.name,
                         )
 
+    async def _run_sse(self, config: dict):
+        """Run the server using SSE transport (legacy MCP Server-Sent Events)."""
+        if not _MCP_SSE_AVAILABLE:
+            raise ImportError(
+                f"MCP server '{self.name}' requires SSE transport but "
+                "mcp.client.sse is not available. Upgrade the mcp package "
+                "to get SSE support."
+            )
+
+        url = config["url"]
+        headers = dict(config.get("headers") or {})
+        connect_timeout = config.get("connect_timeout", _DEFAULT_CONNECT_TIMEOUT)
+        tool_timeout = config.get("timeout", _DEFAULT_TOOL_TIMEOUT)
+
+        sampling_kwargs = self._sampling.session_kwargs() if self._sampling else {}
+        if _MCP_NOTIFICATION_TYPES and _MCP_MESSAGE_HANDLER_SUPPORTED:
+            sampling_kwargs["message_handler"] = self._make_message_handler()
+
+        # sse_client accepts the same (read_stream, write_stream) pattern
+        # as streamable_http_client.
+        _sse_kwargs: dict = {
+            "headers": headers or None,
+            "timeout": float(connect_timeout),
+            "sse_read_timeout": float(tool_timeout),
+        }
+
+        async with sse_client(url, **_sse_kwargs) as (
+            read_stream, write_stream,
+        ):
+            async with ClientSession(read_stream, write_stream, **sampling_kwargs) as session:
+                await session.initialize()
+                self.session = session
+                await self._discover_tools()
+                self._ready.set()
+                await self._shutdown_event.wait()
+
     async def _discover_tools(self):
         """Discover tools from the connected session."""
         if self.session is None:
@@ -1113,7 +1170,10 @@ class MCPServerTask:
         while True:
             try:
                 if self._is_http():
-                    await self._run_http(config)
+                    if self._is_sse():
+                        await self._run_sse(config)
+                    else:
+                        await self._run_http(config)
                 else:
                     await self._run_stdio(config)
                 # Transport returned cleanly. Two cases:
@@ -2425,7 +2485,15 @@ def get_mcp_status() -> List[dict]:
         active_servers = dict(_servers)
 
     for name, cfg in configured.items():
-        transport = "http" if "url" in cfg else "stdio"
+        url = cfg.get("url", "")
+        from urllib.parse import urlparse
+        path = urlparse(url).path if url else ""
+        if cfg.get("transport", "").lower() == "sse" or path.rstrip("/").endswith("/sse"):
+            transport = "sse"
+        elif "url" in cfg:
+            transport = "http"
+        else:
+            transport = "stdio"
         server = active_servers.get(name)
         if server and server.session is not None:
             entry = {
