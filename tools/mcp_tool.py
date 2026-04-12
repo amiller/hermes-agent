@@ -1091,8 +1091,40 @@ class MCPServerTask:
                             "tearing down legacy HTTP session", self.name,
                         )
 
+    async def _sse_keepalive(self, session, interval: float = 60.0):
+        """Send periodic pings to keep the SSE connection alive.
+
+        Some SSE MCP servers (e.g. Router Teamwork, Supermemory on
+        Cloudflare Workers) close idle connections after a few minutes
+        of silence.  This coroutine sends a lightweight MCP ping every
+        *interval* seconds so the server sees the client as active.
+        On failure the loop exits silently -- the main ``_run_sse``
+        coroutine will notice the dead session on the next tool call
+        or when the SSE stream raises.
+        """
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    await session.send_ping()
+                except Exception:
+                    logger.debug(
+                        "MCP server '%s': SSE keepalive ping failed",
+                        self.name,
+                    )
+                    break
+        except asyncio.CancelledError:
+            pass
+
     async def _run_sse(self, config: dict):
-        """Run the server using SSE transport (legacy MCP Server-Sent Events)."""
+        """Run the server using SSE transport (legacy MCP Server-Sent Events).
+
+        Uses a long read timeout (300s) and a background keepalive task
+        that pings every 60s to prevent servers from closing idle SSE
+        connections.  Without keepalive, many SSE servers drop the
+        connection after ~60-120s of silence, causing ClosedResourceError
+        on the next tool call.
+        """
         if not _MCP_SSE_AVAILABLE:
             raise ImportError(
                 f"MCP server '{self.name}' requires SSE transport but "
@@ -1103,19 +1135,30 @@ class MCPServerTask:
         url = config["url"]
         headers = dict(config.get("headers") or {})
         connect_timeout = config.get("connect_timeout", _DEFAULT_CONNECT_TIMEOUT)
-        tool_timeout = config.get("timeout", _DEFAULT_TOOL_TIMEOUT)
+
+        # OAuth 2.1 PKCE support (same as _run_http).
+        _oauth_auth = None
+        if self._auth_type == "oauth":
+            try:
+                from tools.mcp_oauth import build_oauth_auth
+                _oauth_auth = build_oauth_auth(
+                    self.name, url, config.get("oauth")
+                )
+            except Exception as exc:
+                logger.warning("MCP OAuth setup failed for '%s': %s", self.name, exc)
+                raise
 
         sampling_kwargs = self._sampling.session_kwargs() if self._sampling else {}
         if _MCP_NOTIFICATION_TYPES and _MCP_MESSAGE_HANDLER_SUPPORTED:
             sampling_kwargs["message_handler"] = self._make_message_handler()
 
-        # sse_client accepts the same (read_stream, write_stream) pattern
-        # as streamable_http_client.
         _sse_kwargs: dict = {
             "headers": headers or None,
             "timeout": float(connect_timeout),
-            "sse_read_timeout": float(tool_timeout),
+            "sse_read_timeout": 300.0,  # 5 min — server keepalive is 60s
         }
+        if _oauth_auth is not None:
+            _sse_kwargs["auth"] = _oauth_auth
 
         async with sse_client(url, **_sse_kwargs) as (
             read_stream, write_stream,
@@ -1125,7 +1168,19 @@ class MCPServerTask:
                 self.session = session
                 await self._discover_tools()
                 self._ready.set()
-                await self._shutdown_event.wait()
+
+                # Start keepalive to prevent idle disconnect
+                keepalive = asyncio.ensure_future(
+                    self._sse_keepalive(session)
+                )
+                try:
+                    await self._shutdown_event.wait()
+                finally:
+                    keepalive.cancel()
+                    try:
+                        await keepalive
+                    except (asyncio.CancelledError, Exception):
+                        pass
 
     async def _discover_tools(self):
         """Discover tools from the connected session."""
@@ -2329,7 +2384,11 @@ async def _discover_and_register_server(name: str, config: dict) -> List[str]:
     registered_names = _register_server_tools(name, server, config)
     server._registered_tool_names = list(registered_names)
 
-    transport_type = "HTTP" if "url" in config else "stdio"
+    transport_type = (
+        "SSE" if server._is_sse()
+        else "HTTP" if "url" in config
+        else "stdio"
+    )
     logger.info(
         "MCP server '%s' (%s): registered %d tool(s): %s",
         name, transport_type, len(registered_names),
