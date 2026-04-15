@@ -1,26 +1,29 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for dcap-qvl (Intel TDX quote verification)
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    pkg-config \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy probe scripts
-COPY near_client.py .
-COPY venice_client.py .
+# Copy TEE providers code
+COPY . /app/
 
 # Install Python dependencies
-RUN pip install --no-cache-dir httpx
+RUN pip install --no-cache-dir \
+    requests \
+    eth-account \
+    cryptography \
+    dcap-qvl \
+    pytest
 
 # Make scripts executable
-RUN chmod +x near_client.py venice_client.py
+RUN chmod +x near_validating_provider.py venice_client.py test_validating_provider.py
 
-# Default command: run both probes
-CMD echo "=== Running NEAR AI TEE Probe ===" && \
-    python near_client.py && \
-    echo "" && \
-    echo "=== Running Venice TEE Probe ===" && \
-    python venice_client.py
+# Default command: run tests
+CMD ["python", "test_validating_provider.py"]
