@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy TEE providers code
-COPY . /app/
+# Copy TEE providers code from examples/tee-providers
+COPY examples/tee-providers/ /app/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
