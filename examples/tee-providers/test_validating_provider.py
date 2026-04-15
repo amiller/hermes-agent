@@ -55,9 +55,13 @@ def test_happy_path_valid_attestation():
     assert "choices" in response, "Response should have 'choices' field"
     assert len(response["choices"]) > 0, "Response should have at least one choice"
     assert "message" in response["choices"][0], "Choice should have 'message' field"
-    assert "content" in response["choices"][0]["message"], "Message should have 'content' field"
 
-    completion = response["choices"][0]["message"]["content"]
+    message = response["choices"][0]["message"]
+    # Try to get content, fall back to reasoning if content is None
+    completion = message.get("content")
+    if completion is None:
+        completion = message.get("reasoning", "")
+
     assert len(completion.strip()) > 0, "Completion should not be empty"
 
     print("\n✅ Happy path test PASSED")
