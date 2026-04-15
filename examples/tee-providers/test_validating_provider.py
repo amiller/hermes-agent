@@ -48,6 +48,10 @@ def test_happy_path_valid_attestation():
     response = provider.chat(messages, model="deepseek-ai/DeepSeek-V3.1", max_tokens=10)
 
     # Verify response structure
+    print(f"\nDEBUG: Response type: {type(response)}")
+    print(f"DEBUG: Response keys: {response.keys() if isinstance(response, dict) else 'N/A'}")
+
+    assert isinstance(response, dict), f"Response should be a dict, got {type(response)}"
     assert "choices" in response, "Response should have 'choices' field"
     assert len(response["choices"]) > 0, "Response should have at least one choice"
     assert "message" in response["choices"][0], "Choice should have 'message' field"
