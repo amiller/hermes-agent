@@ -170,10 +170,10 @@ def test_negative_path_wrong_tls_fingerprint():
             provider_tampered.verify_endpoint("cloud-api.near.ai")
 
         error_msg = str(exc_info.value)
-        # Assert the error message mentions TLS or fingerprint binding
-        assert ("tls" in error_msg.lower() or "fingerprint" in error_msg.lower() or
-                "binds" in error_msg.lower()), \
-            f"Expected error about TLS/fingerprint binding, got: {error_msg}"
+        # Assert the error message specifically mentions TLS fingerprint binding
+        # (not just domain mismatch or other attestation failures)
+        assert "binds" in error_msg.lower() and ("tls" in error_msg.lower() or "fingerprint" in error_msg.lower()), \
+            f"Expected error about TLS fingerprint binding, got: {error_msg}"
 
         # Verify the mock was called with correct parameters
         assert mock_get.called
