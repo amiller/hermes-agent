@@ -97,13 +97,13 @@ def test_negative_path_invalid_domain():
 
 def test_negative_path_wrong_tls_fingerprint():
     """
-    Negative path: Tampered attestation → verification fails.
+    Negative path: Tampered TLS fingerprint → verification fails.
 
-    This test verifies that the provider detects when attestation data
-    has been tampered with (e.g., wrong TLS fingerprint).
+    This test verifies that the provider detects when the TLS certificate
+    fingerprint in the attestation response has been tampered with.
     """
     print("\n" + "=" * 70)
-    print("TEST: Negative path - attestation tampering detection")
+    print("TEST: Negative path - TLS fingerprint tampering detection")
     print("=" * 70)
 
     # Skip if no API key
@@ -111,27 +111,71 @@ def test_negative_path_wrong_tls_fingerprint():
     if not api_key:
         pytest.skip("NEAR_API_KEY not set")
 
+    from unittest.mock import patch, MagicMock
+    import requests
+
+    # First, fetch a real attestation response to use as a template
     provider = ValidatingNearProvider(strict_mode=True)
+    base_url = provider.base_url
 
-    # This would require mocking the API response with bad data
-    # For now, we test that the provider rejects wrong domains
-    # (which is sufficient to prove the gating logic works)
+    # Fetch the real response first
+    nonce = "a" * 64  # Fixed nonce for consistency
+    url = f"{base_url}/v1/attestation/report"
+    params = {"nonce": nonce, "signing_algo": "ecdsa", "include_tls_fingerprint": "true"}
+    headers = {"Authorization": f"Bearer {api_key}"}
 
-    # Try to chat with wrong base URL that won't match domain
-    provider_bad = ValidatingNearProvider(
-        api_key=api_key,
-        base_url="https://cloud-api.near.ai",  # Correct URL, but we'll verify wrong domain
-        strict_mode=True
-    )
+    real_response = requests.get(url, params=params, headers=headers, timeout=30)
+    real_response.raise_for_status()
+    real_report = real_response.json()
 
-    with pytest.raises(AttestationError) as exc_info:
-        provider_bad.verify_endpoint("malicious.example.com")
+    # Extract the original TLS fingerprint and flip one byte
+    original_fingerprint = real_report["gateway_attestation"]["tls_cert_fingerprint"]
+    fingerprint_bytes = bytes.fromhex(original_fingerprint)
 
-    error_msg = str(exc_info.value)
-    assert "Attestation verification failed" in error_msg
+    # Flip the first byte to create a tampered fingerprint
+    tampered_bytes = bytearray(fingerprint_bytes)
+    tampered_bytes[0] = tampered_bytes[0] ^ 0xFF  # Flip all bits in first byte
+    tampered_fingerprint = tampered_bytes.hex()
 
-    print("\n✅ Tampering detection test PASSED")
-    print(f"   Provider correctly rejects mismatched domains")
+    print(f"Original fingerprint: {original_fingerprint}")
+    print(f"Tampered fingerprint: {tampered_fingerprint}")
+
+    # Create a tampered report
+    tampered_report = real_report.copy()
+    tampered_report["gateway_attestation"] = real_report["gateway_attestation"].copy()
+    tampered_report["gateway_attestation"]["tls_cert_fingerprint"] = tampered_fingerprint
+
+    # Mock the requests.get to return the tampered response
+    mock_response = MagicMock()
+    mock_response.json.return_value = tampered_report
+    mock_response.raise_for_status = MagicMock()
+
+    with patch('requests.get', return_value=mock_response) as mock_get:
+        provider_tampered = ValidatingNearProvider(
+            api_key=api_key,
+            base_url=base_url,
+            strict_mode=True
+        )
+
+        # Verify that the tampered fingerprint causes an AttestationError
+        with pytest.raises(AttestationError) as exc_info:
+            provider_tampered.verify_endpoint("cloud-api.near.ai")
+
+        error_msg = str(exc_info.value)
+        # Assert the error message mentions TLS or fingerprint binding
+        assert ("tls" in error_msg.lower() or "fingerprint" in error_msg.lower() or
+                "binds" in error_msg.lower()), \
+            f"Expected error about TLS/fingerprint binding, got: {error_msg}"
+
+        # Verify the mock was called with correct parameters
+        assert mock_get.called
+        call_args = mock_get.call_args
+        assert call_args[0][0].startswith(base_url)
+        assert "include_tls_fingerprint" in call_args[1].get("params", {})
+
+    print("\n✅ TLS fingerprint tampering detection test PASSED")
+    print(f"   Provider correctly rejected tampered TLS fingerprint")
+    print(f"   Error message: {error_msg}")
     print("=" * 70)
 
 
