@@ -85,6 +85,8 @@ class ProviderConfig:
     api_key_env_vars: tuple = ()
     # Optional env var for base URL override
     base_url_env_var: str = ""
+    # Optional attestation configuration for TEE providers
+    attestation_config: Optional[Dict[str, Any]] = None
 
 
 PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
@@ -134,6 +136,19 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         inference_base_url="https://api.minimaxi.com/v1",
         api_key_env_vars=("MINIMAX_CN_API_KEY",),
         base_url_env_var="MINIMAX_CN_BASE_URL",
+    ),
+    "near-ai": ProviderConfig(
+        id="near-ai",
+        name="NEAR AI (TEE-attested)",
+        auth_type="api_key",
+        inference_base_url="https://cloud-api.near.ai",
+        api_key_env_vars=("NEAR_API_KEY",),
+        base_url_env_var="NEAR_BASE_URL",
+        attestation_config={
+            "type": "tdx",
+            "endpoint": "/v1/attestation/report",
+            "verifier": "nearai",
+        },
     ),
 }
 
@@ -1448,6 +1463,89 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
         "api_key": api_key,
         "base_url": base_url.rstrip("/"),
         "source": key_source or "default",
+    }
+
+
+def resolve_near_ai_runtime_credentials() -> Dict[str, Any]:
+    """Resolve NEAR AI API key and base URL.
+
+    Returns dict with: provider, api_key, base_url, source, key_id.
+    """
+    provider_id = "near-ai"
+    pconfig = PROVIDER_REGISTRY.get(provider_id)
+    if not pconfig:
+        raise AuthError(
+            f"Provider '{provider_id}' not found in registry.",
+            provider=provider_id,
+            code="invalid_provider",
+        )
+
+    api_key = ""
+    key_source = ""
+    for env_var in pconfig.api_key_env_vars:
+        val = os.getenv(env_var, "").strip()
+        if val:
+            api_key = val
+            key_source = env_var
+            break
+
+    env_url = ""
+    if pconfig.base_url_env_var:
+        env_url = os.getenv(pconfig.base_url_env_var, "").strip()
+
+    base_url = env_url.rstrip("/") if env_url else pconfig.inference_base_url
+
+    # Extract key_id from API key for traceability (first 8 chars)
+    key_id = api_key[:8] if api_key else ""
+
+    return {
+        "provider": provider_id,
+        "api_key": api_key,
+        "base_url": base_url.rstrip("/"),
+        "source": key_source or "default",
+        "key_id": key_id,
+    }
+
+
+def get_near_ai_auth_status() -> Dict[str, Any]:
+    """Get NEAR AI authentication status.
+
+    Returns dict with: configured, provider, name, key_source, base_url, logged_in.
+    """
+    provider_id = "near-ai"
+    pconfig = PROVIDER_REGISTRY.get(provider_id)
+    if not pconfig:
+        return {
+            "configured": False,
+            "provider": provider_id,
+            "name": "Unknown",
+            "key_source": "",
+            "base_url": "",
+            "logged_in": False,
+        }
+
+    api_key = ""
+    key_source = ""
+    for env_var in pconfig.api_key_env_vars:
+        val = os.getenv(env_var, "").strip()
+        if val:
+            api_key = val
+            key_source = env_var
+            break
+
+    env_url = ""
+    if pconfig.base_url_env_var:
+        env_url = os.getenv(pconfig.base_url_env_var, "").strip()
+
+    base_url = env_url.rstrip("/") if env_url else pconfig.inference_base_url
+
+    return {
+        "configured": bool(api_key),
+        "provider": provider_id,
+        "name": pconfig.name,
+        "key_source": key_source or "default",
+        "base_url": base_url,
+        "logged_in": bool(api_key),
     }
 
 

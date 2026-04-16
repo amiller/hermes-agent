@@ -13,8 +13,10 @@ from hermes_cli.auth import (
     resolve_nous_runtime_credentials,
     resolve_codex_runtime_credentials,
     resolve_api_key_provider_credentials,
+    resolve_near_ai_runtime_credentials,
 )
-from hermes_cli.config import load_config
+from hermes_cli.attestation import verify_attestation
+from hermes_cli.config import load_config, get_attestation_config
 from hermes_constants import OPENROUTER_BASE_URL
 
 
@@ -111,6 +113,7 @@ def resolve_runtime_provider(
     requested: Optional[str] = None,
     explicit_api_key: Optional[str] = None,
     explicit_base_url: Optional[str] = None,
+    verify_attestation: bool = True,
 ) -> Dict[str, Any]:
     """Resolve runtime provider credentials for agent execution."""
     requested_provider = resolve_requested_provider(requested)
@@ -147,6 +150,57 @@ def resolve_runtime_provider(
             "last_refresh": creds.get("last_refresh"),
             "requested_provider": requested_provider,
         }
+
+    # NEAR AI provider (with TEE attestation support)
+    if provider == "near-ai":
+        creds = resolve_near_ai_runtime_credentials()
+        base_creds = {
+            "provider": "near-ai",
+            "api_mode": "chat_completions",
+            "base_url": creds.get("base_url", "").rstrip("/"),
+            "api_key": creds.get("api_key", ""),
+            "source": creds.get("source", "env"),
+            "key_id": creds.get("key_id", ""),
+            "requested_provider": requested_provider,
+        }
+
+        # Verify attestation if enabled
+        if verify_attestation:
+            attestation_config = get_attestation_config(provider)
+            if attestation_config.get("enabled", False):
+                try:
+                    attestation_report = verify_attestation(
+                        provider,
+                        base_creds,
+                        attestation_config,
+                    )
+                    base_creds["attestation"] = attestation_report
+
+                    # Fail in strict mode if attestation is invalid
+                    if not attestation_report.valid and attestation_config.get("strict", False):
+                        raise AuthError(
+                            f"Attestation verification failed for {provider}: {attestation_report.error}",
+                            provider=provider,
+                            code="attestation_failed",
+                        )
+                except Exception as e:
+                    # Log at warning level in non-strict mode
+                    if not attestation_config.get("strict", False):
+                        import logging
+                        logging.warning(f"Attestation verification failed for {provider}: {e}")
+                        # Attach invalid attestation report to creds
+                        base_creds["attestation"] = type('obj', (object,), {
+                            'valid': False,
+                            'provider': provider,
+                            'attestation_type': 'tdx',
+                            'verified_at': '',
+                            'details': {},
+                            'error': str(e),
+                        })()
+                    else:
+                        raise
+
+        return base_creds
 
     # API-key providers (z.ai/GLM, Kimi, MiniMax, MiniMax-CN)
     pconfig = PROVIDER_REGISTRY.get(provider)

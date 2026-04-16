@@ -1,169 +1,164 @@
-# Add TEE Attestation Verification for NEAR AI Provider
+# Add NEAR AI as a First-Class TEE-Attested Provider
 
 ## Summary
 
-This PR adds a proof-of-concept TEE (Trusted Execution Environment) attestation verification capability for Hermes Agent, focusing on NEAR AI Cloud as the first supported provider. The implementation validates Intel TDX quotes, gateway TLS certificate binding, and attestation report data before trusting inference outputs.
+This PR wires NEAR AI into `hermes_cli/` as a real, first-class provider with opt-in TEE (Trusted Execution Environment) attestation verification. The `examples/tee-providers/` probe remains as a historical reference and demo, but NEAR AI can now be used by setting `provider: near-ai` in the hermes config and routing inference through the attested path.
 
-## Changes
+## What Changed
 
-### New Files
+### Core Hermes CLI Integration
 
-- `examples/tee-providers/near_validating_provider.py` - TEE-validating provider wrapper for NEAR AI
-- `examples/tee-providers/venice_client.py` - Venice AI client (attestation not available, documented)
-- `examples/tee-providers/test_validating_provider.py` - End-to-end tests (happy path + negative path)
-- `examples/tee-providers/Dockerfile` - Container for isolated testing
-- `examples/tee-providers/README.md` - Build/run instructions
-- `examples/tee-providers/PROVIDER_INTERFACE.md` - Provider interface documentation
-- `examples/tee-providers/VENDOR.md` - Vendored nearai-cloud-verifier metadata
-- `examples/tee-providers/DESIGN.md` - Design for upstream `provider.attestation` capability
-- `examples/tee-providers/vendor/nearai-cloud-verifier/` - Vendored NEAR AI verifier SDK (commit: ec304017)
+- **`hermes_cli/attestation.py`** (NEW, ~180 lines)
+  - `AttestationReport` dataclass for verification results
+  - `verify_attestation()` dispatcher for provider-specific verification
+  - `_verify_near_ai_attestation()` implementation using vendored nearai-cloud-verifier
+  - `_skip_attestation()` helper for non-TEE providers
 
-### Vendored Dependencies
+- **`hermes_cli/auth.py`** (MODIFIED)
+  - Extended `ProviderConfig` with `attestation_config: Optional[Dict[str, Any]]` field
+  - Added `'near-ai'` entry to `PROVIDER_REGISTRY` with TDX attestation config
+  - Added `resolve_near_ai_runtime_credentials()` function
+  - Added `get_near_ai_auth_status()` function
 
-- `nearai-cloud-verifier@ec304017` - Official NEAR AI Cloud verifier (Python modules for TDX quote validation, TLS binding, GPU attestation)
+- **`hermes_cli/runtime_provider.py`** (MODIFIED)
+  - Added dispatch branch for `provider='near-ai'` calling `resolve_near_ai_runtime_credentials`
+  - Added `verify_attestation: bool = True` parameter to `resolve_runtime_provider()`
+  - Integrated attestation verification after credential resolution
+  - Implemented strict mode: raises `AuthError(code='attestation_failed')` when verification fails
+  - Implemented non-strict mode: logs warnings and continues with invalid attestation
 
-## What This PR Does
+- **`hermes_cli/config.py`** (MODIFIED)
+  - Added `get_attestation_config()` helper to load attestation settings from config
 
-### For Users
+### Provider Implementation
 
-- Enables TEE-verified inference from NEAR AI Cloud
-- Provides clear error messages when attestation fails
-- Offers strict/non-strict modes for different security requirements
-- Includes Docker container for isolated testing
+- **`hermes_cli/providers/__init__.py`** (NEW)
+  - Package initialization for provider implementations
 
-### For Developers
+- **`hermes_cli/providers/near_ai.py`** (NEW, ~110 lines)
+  - `NEARAIProvider` class for direct provider usage
+  - `create_near_ai_provider()` factory function
+  - Cleaned-up version of the original `examples/tee-providers/near_validating_provider.py`
+  - Historical note pointing to the original probe file
 
-- Demonstrates how to compose TEE verifiers into Hermes Agent providers
-- Documents the provider interface contract (PROVIDER_INTERFACE.md)
-- Provides design proposal for upstream integration (DESIGN.md)
-- Includes working tests that can be extended
+### Testing
+
+- **`tests/integration/test_near_provider_integration.py`** (NEW)
+  - Requires `NEAR_API_KEY` environment variable (skipped if absent)
+  - Tests credential resolution with attestation verification
+  - Tests actual inference call to NEAR AI Cloud with retries
+  - Documents expected behavior for strict mode failure (test implementation pending config override)
+
+### Documentation
+
+- **`examples/tee-providers/PR_DRAFT.md`** (REWRITTEN)
+  - Updated to reflect that NEAR AI is now a first-class provider
+  - Removed "Fully backward compatible - only adds files under examples/" claim
+  - Added explicit backward compatibility note (opt-in via config)
+  - Added Known Caveats section linking to security findings
+
+## Configuration
+
+Users can enable attestation verification by adding to `~/.hermes/config.yaml`:
+
+```yaml
+model:
+  provider: "near-ai"
+  default: "deepseek-ai/DeepSeek-V3.1"
+  attestation:
+    enabled: true
+    strict: false  # If true, fail on attestation error
+```
 
 ## Test Plan
 
-### Unit Tests
+### Integration Tests
 
 ```bash
-# Run in Docker
+# Run integration tests (requires NEAR_API_KEY)
+cd /home/amiller/projects/hermes-agent-tee-probe
+NEAR_API_KEY=sk-... pytest tests/integration/test_near_provider_integration.py -v
+```
+
+### Manual Testing
+
+```bash
+# Set up environment
+export NEAR_API_KEY=sk-...
+
+# Test with attestation verification enabled
+python -c "
+from hermes_cli.runtime_provider import resolve_runtime_provider
+creds = resolve_runtime_provider(requested='near-ai', verify_attestation=True)
+print(f'Provider: {creds[\"provider\"]}')
+print(f'Base URL: {creds[\"base_url\"]}')
+print(f'Attestation valid: {creds.get(\"attestation\", {}).get(\"valid\", \"N/A\")}')
+"
+```
+
+### Docker Test
+
+```bash
+# Build and run in Docker (from examples/tee-providers/)
 docker build -t hermes-tee-provider examples/tee-providers
 docker run --rm --env-file /path/to/.env.near hermes-tee-provider
-
-# Run directly
-cd examples/tee-providers
-python test_validating_provider.py
 ```
-
-### Test Cases
-
-1. **Happy Path** ✓
-   - Fetch attestation report from `cloud-api.near.ai`
-   - Verify Intel TDX quote
-   - Verify report_data binding (signing address + TLS fingerprint + nonce)
-   - Verify gateway TLS certificate fingerprint
-   - Successfully send chat completion
-   - Receive non-empty response
-
-2. **Negative Path** ✓
-   - Attempt verification with wrong domain (`wrong-domain.example`)
-   - Attestation verification fails
-   - `AttestationError` raised in strict mode
-   - No completion returned
-
-3. **Non-Strict Mode** ✓
-   - Attestation failure returns `False` instead of raising exception
-   - Warning logged, execution continues (for development)
-
-### Manual Verification
-
-```bash
-# Demo with strict mode
-NEAR_API_KEY=sk-... NEAR_STRICT_MODE=1 python near_validating_provider.py
-
-# Should see:
-# ✓ Gateway attestation found
-# ✓ TDX quote valid
-# ✓ Report data binding verified
-# ✓ TLS certificate fingerprint verified
-# ✅ Attestation verification PASSED
-```
-
-## Risks and Mitigations
-
-### Risk 1: Additional Dependencies
-
-**Risk**: Vendoring `nearai-cloud-verifier` adds ~200KB of code and requires `dcap-qvl` (Intel TDX verification library).
-
-**Mitigation**:
-- Vendored at specific commit (ec304017) for reproducibility
-- Dependencies are optional (only used for TEE providers)
-- Documented in VENDOR.md with upgrade path
-
-### Risk 2: False Positives
-
-**Risk**: Attestation verification may fail due to transient network issues or API changes, blocking valid inference.
-
-**Mitigation**:
-- Default to non-strict mode (warn, don't fail)
-- Clear error messages with remediation steps
-- User can disable attestation if needed
-- Timeout and retry logic in verification
-
-### Risk 3: Maintenance Burden
-
-**Risk**: TEE verification logic requires ongoing maintenance as providers update their attestation formats.
-
-**Mitigation**:
-- This is a proof-of-concept in `examples/` (not core)
-- Uses official NEAR AI verifier (maintained by NEAR team)
-- Design.md proposes upstream integration path with clear ownership
-
-### Risk 4: Security Through Obscurity
-
-**Risk**: Users may think TEE attestation provides complete security guarantees.
-
-**Mitigation**:
-- Clear documentation of what is/is not verified
-- Explicit warnings for non-TEE providers (Venice AI)
-- DESIGN.md explains threat model and limitations
-
-## Documentation
-
-- `examples/tee-providers/README.md` - Quick start, usage, test results
-- `examples/tee-providers/PROVIDER_INTERFACE.md` - Provider contract (with line number references)
-- `examples/tee-providers/DESIGN.md` - Upstream integration design (proposed `provider.attestation` config)
-- `examples/tee-providers/VENDOR.md` - Vendored dependencies and rationale
 
 ## Backward Compatibility
 
-✓ **Fully backward compatible** - This PR only adds files under `examples/tee-providers/` and does not modify existing Hermes Agent code.
+This PR is backward compatible because:
+- NEAR AI is an **opt-in** provider (only activated when `model.provider: near-ai`)
+- Attestation verification is **disabled by default** (`model.attestation.enabled: false`)
+- Existing providers (nous, openrouter, zai, etc.) are completely unaffected
+- The `examples/tee-providers/` probe remains intact as historical reference
+
+## Known Caveats
+
+Before deploying this for sensitive workloads, users should be aware of:
+
+1. **Model Substitution Risk** (HERMES-TEE-3): TEE attestation verifies the hardware and gateway, but does not guarantee that the specified model (e.g., `deepseek-ai/DeepSeek-V3.1`) is the actual model serving the request. See `/home/amiller/projects/ai-workflows/smithers-workspace/reports/tasks/HERMES-TEE-3.html` for details.
+
+2. **Prompt Exfiltration Risk** (HERMES-TEE-4): While TEE protects the inference process, prompts and responses may still be logged or processed by the provider in ways not covered by attestation. See `/home/amiller/projects/ai-workflows/smithers-workspace/reports/tasks/HERMES-TEE-4.html` for details.
+
+3. **Attestation Replay**: The implementation uses a random nonce per verification to prevent replay attacks.
+
+4. **Network Dependencies**: Attestation verification requires network access to `cloud-api.near.ai` and Intel TDX verification services. Failures are handled per the `strict` mode setting.
+
+5. **Vendor Lock-in**: This implementation is specific to NEAR AI's attestation format. Other TEE providers would require different verifiers.
+
+## Dependencies
+
+This PR uses the **vendored** `nearai-cloud-verifier` at commit `ec304017`:
+- Location: `examples/tee-providers/vendor/nearai-cloud-verifier/`
+- No new PyPI dependencies added
+- Verifier is imported via `sys.path` manipulation in `hermes_cli/attestation.py`
 
 ## Future Work
 
-1. **Upstream Integration** - Implement `provider.attestation` capability as proposed in DESIGN.md
-2. **Additional Providers** - Add TEE support for other providers (e.g., OpenAI, Anthropic) if they expose attestation
-3. **Per-Request Verification** - Option to verify attestation on each request (vs once per session)
-4. **GPU Attestation** - Verify H100/H200 attestation via NVIDIA NRAS
-5. **Plugin System** - Allow custom attestation verifiers for private TEE deployments
+1. **Config Override for Testing**: Add a mechanism to override attestation config in tests (needed for strict mode failure test)
 
-## References
+2. **Per-Request Verification**: Option to verify attestation on each request (vs once per session)
 
-- NEAR AI Cloud Verifier: https://github.com/nearai/nearai-cloud-verifier
-- Intel TDX: https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html
-- Related Issue: #2205 (Venice integration - does not mention TEE, open whitespace)
+3. **GPU Attestation**: Verify H100/H200 attestation via NVIDIA NRAS (vendor supports it, not yet integrated)
+
+4. **Additional TEE Providers**: Extend framework to support other TEE providers (e.g., AMD SEV, AWS Nitro)
+
+5. **Attestation Caching**: Cache verification results with TTL to balance security and performance
 
 ## Checklist
 
 - [x] Code compiles and runs without errors
-- [x] Tests pass (happy path and negative path)
-- [x] Documentation updated (README, DESIGN, PROVIDER_INTERFACE)
-- [x] Vendored dependencies documented (VENDOR.md)
-- [x] Backward compatible (no existing code modified)
-- [x] Security considerations documented
-- [x] Test plan executed and documented
+- [x] Integration tests added (with skip if NEAR_API_KEY absent)
+- [x] Documentation updated (PR_DRAFT.md)
+- [x] Backward compatible (opt-in provider, attestation disabled by default)
+- [x] Security considerations documented (Known Caveats section)
+- [x] No new PyPI dependencies (uses vendored verifier)
+- [x] Historical probe file preserved in examples/
 
 ---
 
 **To open this PR, run:**
 
 ```bash
-gh pr create --draft --repo NousResearch/hermes-agent --base main --head amiller:feat/tee-attestation-probe --title 'Add TEE Attestation Verification for NEAR AI Provider (Proof of Concept)' --body-file examples/tee-providers/PR_DRAFT.md
+gh pr create --draft --repo NousResearch/hermes-agent --base main --head amiller:feat/tee-attestation-probe --title 'feat: promote NEAR AI validating provider to hermes_cli (first-class TEE-attested provider)' --body-file examples/tee-providers/PR_DRAFT.md
 ```

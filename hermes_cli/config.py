@@ -746,9 +746,33 @@ def save_config(config: Dict[str, Any]):
     """Save configuration to ~/.hermes/config.yaml."""
     ensure_hermes_home()
     config_path = get_config_path()
-    
+
     with open(config_path, 'w') as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+
+def get_attestation_config(provider_id: str) -> Dict[str, Any]:
+    """Load attestation configuration for a provider.
+
+    Reads model.attestation.* from config.yaml and returns the configuration.
+    Defaults to {'enabled': False, 'strict': False} if not configured.
+
+    Args:
+        provider_id: Provider identifier (e.g., "near-ai")
+
+    Returns:
+        Dictionary with attestation configuration
+    """
+    config = load_config()
+    model_cfg = config.get("model", {})
+
+    if isinstance(model_cfg, dict):
+        attestation_cfg = model_cfg.get("attestation")
+        if isinstance(attestation_cfg, dict) and attestation_cfg:
+            return dict(attestation_cfg)
+
+    # Default: disabled
+    return {"enabled": False, "strict": False}
 
 
 def load_env() -> Dict[str, str]:

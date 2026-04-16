@@ -5,6 +5,11 @@ TEE-validating provider wrapper for NEAR AI Cloud.
 Composes vendored nearai-cloud-verifier modules to validate TEE attestation
 before trusting inference outputs.
 
+DEPRECATED: This file is retained for historical and reference purposes only.
+The NEAR AI provider has been promoted to a first-class provider in hermes_cli/.
+For production use, please use `hermes_cli/providers/near_ai.py` and configure
+via `provider: near-ai` in your hermes config.
+
 Usage:
     python near_validating_provider.py
 
