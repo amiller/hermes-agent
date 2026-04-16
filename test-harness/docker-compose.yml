@@ -8,7 +8,7 @@ services:
       - CONDUIT_CONFIG=/etc/conduit.toml
     volumes:
       - ./conduit.toml:/etc/conduit.toml:ro
-      - conduit-data:/var/lib/conduwuit
+      - conduit-data:/var/lib/conduit
     networks:
       - matrix-test
     healthcheck:

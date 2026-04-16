@@ -135,7 +135,7 @@ When implementing new HERMES-GW-N features, follow this pattern:
 Check if the homeserver is healthy:
 ```bash
 docker compose ps
-docker compose logs conduwuit
+docker compose logs conduit
 ```
 
 ### Tests fail with "Failed to both login and register"
@@ -155,7 +155,7 @@ docker volume prune -f
 If the latest Conduit image changes behavior, pin a specific version:
 ```yaml
 services:
-  conduwuit:
+  conduit:
     image: matrixconduit/matrix-conduit:v0.6.0  # Pin version
 ```
 
