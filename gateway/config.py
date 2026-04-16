@@ -27,6 +27,7 @@ class Platform(Enum):
     WHATSAPP = "whatsapp"
     SLACK = "slack"
     HOMEASSISTANT = "homeassistant"
+    MATRIX = "matrix"
 
 
 @dataclass
@@ -389,6 +390,52 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         hass_url = os.getenv("HASS_URL")
         if hass_url:
             config.platforms[Platform.HOMEASSISTANT].extra["url"] = hass_url
+
+    # Matrix
+    matrix_token = os.getenv("MATRIX_ACCESS_TOKEN")
+    matrix_password = os.getenv("MATRIX_PASSWORD")
+    matrix_homeserver = os.getenv("MATRIX_HOMESERVER")
+
+    if matrix_token or (matrix_password and os.getenv("MATRIX_USER_ID")):
+        if matrix_homeserver:
+            if Platform.MATRIX not in config.platforms:
+                config.platforms[Platform.MATRIX] = PlatformConfig()
+            config.platforms[Platform.MATRIX].enabled = True
+            config.platforms[Platform.MATRIX].extra["homeserver"] = matrix_homeserver
+
+            if matrix_token:
+                config.platforms[Platform.MATRIX].token = matrix_token
+            else:
+                config.platforms[Platform.MATRIX].extra["password"] = matrix_password
+                config.platforms[Platform.MATRIX].extra["user_id"] = os.getenv("MATRIX_USER_ID", "")
+
+            # Matrix encryption settings
+            matrix_encryption = os.getenv("MATRIX_ENCRYPTION", "").lower() in ("true", "1", "yes")
+            if matrix_encryption:
+                config.platforms[Platform.MATRIX].extra["encryption"] = True
+
+            matrix_device_id = os.getenv("MATRIX_DEVICE_ID")
+            if matrix_device_id:
+                config.platforms[Platform.MATRIX].extra["device_id"] = matrix_device_id
+
+            # Matrix E2EE auto-bootstrap setting
+            matrix_auto_bootstrap = os.getenv("MATRIX_AUTO_BOOTSTRAP_E2EE", "").lower() in ("true", "1", "yes")
+            if matrix_auto_bootstrap:
+                config.platforms[Platform.MATRIX].extra["auto_bootstrap_e2ee"] = True
+
+            # Matrix recovery key (may be set via env or auto-bootstrapped)
+            matrix_recovery_key = os.getenv("MATRIX_RECOVERY_KEY")
+            if matrix_recovery_key:
+                config.platforms[Platform.MATRIX].extra["recovery_key"] = matrix_recovery_key
+
+            # Matrix home room
+            matrix_home = os.getenv("MATRIX_HOME_ROOM")
+            if matrix_home:
+                config.platforms[Platform.MATRIX].home_channel = HomeChannel(
+                    platform=Platform.MATRIX,
+                    chat_id=matrix_home,
+                    name=os.getenv("MATRIX_HOME_ROOM_NAME", "Home"),
+                )
 
     # Session settings
     idle_minutes = os.getenv("SESSION_IDLE_MINUTES")

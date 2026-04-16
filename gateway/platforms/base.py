@@ -261,6 +261,13 @@ class MessageType(Enum):
     COMMAND = "command"  # /command style
 
 
+class ProcessingOutcome(Enum):
+    """Outcome of message processing."""
+    SUCCESS = "success"
+    FAILURE = "failure"
+    CANCELLED = "cancelled"
+
+
 @dataclass
 class MessageEvent:
     """

@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /hermes
+
+# Install additional test dependencies
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    mautrix>=0.20.0
+
+# Note: hermes-agent and its requirements will be installed from the mounted volume at runtime
+# via the command in docker-compose.yml
+
+# Create a non-root user
+RUN useradd -m -u 1000 hermes && chown -R hermes:hermes /hermes
+USER hermes
+
+# Default command
+CMD ["bash"]

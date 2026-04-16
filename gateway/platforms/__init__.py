@@ -9,9 +9,11 @@ Each adapter handles:
 """
 
 from .base import BasePlatformAdapter, MessageEvent, SendResult
+from .matrix import MatrixAdapter as MatrixPlatformAdapter
 
 __all__ = [
     "BasePlatformAdapter",
     "MessageEvent",
     "SendResult",
+    "MatrixPlatformAdapter",
 ]

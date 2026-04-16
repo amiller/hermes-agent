@@ -1,0 +1,9 @@
+[global]
+server_name = "conduit"
+database_path = "/var/lib/conduwuit"
+database_backend = "rocksdb"
+address = "0.0.0.0"
+port = 6167
+max_request_size = 20_000_000
+allow_registration = true
+allow_public_room_directory_over_federation = false
