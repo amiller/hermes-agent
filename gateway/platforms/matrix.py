@@ -1690,6 +1690,38 @@ class MatrixAdapter(BasePlatformAdapter):
             logger.warning("Matrix: invite error: %s", exc)
             return False
 
+    async def fetch_room_history(
+        self, room_id: str, limit: int = 50, start: str = "",
+    ) -> list:
+        """Fetch recent message history from a room."""
+        if not self._client:
+            return []
+
+        try:
+            from_token = SyncToken(start) if start else None
+            resp = await self._client.get_messages(
+                RoomID(room_id),
+                direction=PaginationDirection.BACKWARD,
+                limit=limit,
+                from_token=from_token,
+            )
+
+            messages = []
+            for evt in resp.chunk:
+                msg = {
+                    "event_id": str(evt.event_id),
+                    "sender": str(evt.sender),
+                    "timestamp": evt.timestamp,
+                    "content": evt.content.serialize() if hasattr(evt.content, "serialize") else evt.content,
+                }
+                messages.append(msg)
+
+            logger.info("Matrix: fetched %d messages from %s", len(messages), room_id)
+            return messages
+        except Exception as exc:
+            logger.warning("Matrix: fetch_room_history error: %s", exc)
+            return []
+
     # ------------------------------------------------------------------
     # Presence
     # ------------------------------------------------------------------
