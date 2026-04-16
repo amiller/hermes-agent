@@ -9,19 +9,14 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /hermes
 
-# Install Python dependencies
-COPY requirements.txt /hermes/requirements.txt
-RUN pip install --no-cache-dir -r /hermes/requirements.txt
-
 # Install additional test dependencies
 RUN pip install --no-cache-dir \
     pytest \
     pytest-asyncio \
     mautrix>=0.20.0
 
-# Install hermes-agent in editable mode
-# This will be mounted as a volume, so we just ensure it's ready
-RUN pip install --no-cache-dir -e .
+# Note: hermes-agent and its requirements will be installed from the mounted volume at runtime
+# via the command in docker-compose.yml
 
 # Create a non-root user
 RUN useradd -m -u 1000 hermes && chown -R hermes:hermes /hermes

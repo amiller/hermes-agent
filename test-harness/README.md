@@ -1,13 +1,13 @@
 # Matrix Gateway Test Harness
 
-This directory contains a self-contained Docker Compose test harness for the Hermes Matrix gateway integration. It brings up a local Conduwuit Matrix homeserver and the Hermes gateway side-by-side, enabling integration testing without external dependencies.
+This directory contains a self-contained Docker Compose test harness for the Hermes Matrix gateway integration. It brings up a local Conduit Matrix homeserver and the Hermes gateway side-by-side, enabling integration testing without external dependencies.
 
 ## Architecture
 
 The test harness consists of two main services:
 
-### 1. Conduwuit Homeserver
-- **Image**: `girlbossceo/conduwuit:latest`
+### 1. Conduit Homeserver
+- **Image**: `matrixconduit/matrix-conduit:latest`
 - **Port**: 6167 (internal only)
 - **Purpose**: Lightweight Matrix homeserver written in Rust
 - **Features**:
@@ -33,7 +33,7 @@ The test harness consists of two main services:
 │           matrix-test (bridge network)          │
 │                                                  │
 │  ┌─────────────┐        ┌──────────────────┐   │
-│  │  Conduwuit  │◄───────│   Gateway Test   │   │
+│  │   Conduit   │◄───────│   Gateway Test   │   │
 │  │  :6167      │        │   Container      │   │
 │  └─────────────┘        └──────────────────┘   │
 │     HS Port               Mounts:              │
@@ -151,7 +151,7 @@ docker compose logs conduwuit
 
 ### Tests fail with "Failed to both login and register"
 
-The homeserver might not have registration enabled. Check the `CONDUWUIT_ALLOW_REGISTRATION=true` environment variable in `docker-compose.yml`.
+The homeserver might not have registration enabled. Check the `CONDUIT_ALLOW_REGISTRATION=true` environment variable in `docker-compose.yml`.
 
 ### Volume cleanup issues
 
@@ -161,13 +161,13 @@ docker compose down -v
 docker volume prune -f
 ```
 
-### Conduwuit image changes
+### Conduit image changes
 
-If the latest Conduwuit image changes behavior, pin a specific version:
+If the latest Conduit image changes behavior, pin a specific version:
 ```yaml
 services:
   conduwuit:
-    image: girlbossceo/conduwuit:v0.4.0  # Pin version
+    image: matrixconduit/matrix-conduit:v0.6.0  # Pin version
 ```
 
 Document the working version in this README.
@@ -181,12 +181,15 @@ The test harness ensures:
 - ✅ Clean state on each `docker compose down -v`
 - ✅ Read-only source code mount in gateway container
 
-## Notes on Conduwuit vs Conduit
+## Notes on Conduit Homeserver
 
-This harness uses Conduwuit, a maintained fork of the original Conduit homeserver. Conduwuit offers:
-- Active development and maintenance
-- Better compatibility with modern Matrix clients
-- Improved performance and stability
-- Docker images regularly updated
+This harness uses Conduit, a lightweight Matrix homeserver written in Rust. Conduit offers:
+- Single container deployment
+- No external dependencies
+- Fast boot time (<10s)
+- Low resource requirements
+- Active development
 
-The `girlbossceo/conduwuit:latest` image is used. If you encounter issues, check the [Conduwuit documentation](https://conduwuit.puppyirl.gay/) for the latest configuration options.
+The `matrixconduit/matrix-conduit:latest` image is used. This is the original Conduit project, which is well-maintained and widely used for testing purposes. If you encounter issues, check the [Conduit documentation](https://conduit.rs/) for the latest configuration options.
+
+**Note**: Conduwuit is a maintained fork of Conduit, but the original Conduit image is used here as it's freely available without authentication requirements and provides a stable base for testing.

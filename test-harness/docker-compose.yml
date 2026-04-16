@@ -1,25 +1,14 @@
-version: '3.8'
-
 services:
   conduwuit:
-    image: girlbossceo/conduwuit:latest
+    image: matrixconduit/matrix-conduit:latest
     container_name: conduwuit-homeserver
     ports:
       - "6167:6167"
     environment:
-      - CONDUWUIT_SERVER_NAME=conduwuit
-      - CONDUWUIT_ALLOW_REGISTRATION=true
-      - CONDUWUIT_ALLOW_PUBLIC_ROOMS_OVER_FEDERATION=false
-      - CONDUWUIT_DATABASE_BACKEND=rocksdb
-      - CONDUWUIT_DATABASE_PATH=/var/lib/conduwuit
+      - CONDUIT_CONFIG=/etc/conduit.toml
     volumes:
+      - ./conduit.toml:/etc/conduit.toml:ro
       - conduwuit-data:/var/lib/conduwuit
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6167/_matrix/client/versions"]
-      interval: 5s
-      timeout: 10s
-      retries: 30
-      start_period: 10s
     networks:
       - matrix-test
 
@@ -29,18 +18,18 @@ services:
       dockerfile: Dockerfile.gateway
     container_name: hermes-gateway-test
     volumes:
-      - ../:/hermes:ro
+      - ../:/hermes
+      - gateway-pip:/root/.cache/pip
     working_dir: /hermes
     environment:
       - HERMES_HS_URL=http://conduwuit:6167
       - HERMES_MATRIX_USER=@gateway:conduwuit
       - HERMES_MATRIX_PASSWORD=gateway_password
     depends_on:
-      conduwuit:
-        condition: service_healthy
+      - conduwuit
     networks:
       - matrix-test
-    command: sleep infinity
+    command: bash -c "pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir -e . && sleep infinity"
 
 networks:
   matrix-test:
@@ -48,3 +37,4 @@ networks:
 
 volumes:
   conduwuit-data:
+  gateway-pip:
