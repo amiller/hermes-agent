@@ -1,5 +1,5 @@
 [global]
-server_name = "conduwuit"
+server_name = "conduit"
 database_path = "/var/lib/conduwuit"
 database_backend = "rocksdb"
 address = "0.0.0.0"

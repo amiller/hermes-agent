@@ -13,6 +13,7 @@ The test harness consists of two main services:
 - **Features**:
   - Single container, no external dependencies
   - Fast boot time (<10s)
+  - Healthcheck ensures readiness before tests run
   - Registration enabled (`allow_registration=true`)
   - Federation disabled (test-only environment)
   - Persistent data in Docker volume
@@ -83,15 +84,15 @@ The gateway container uses these environment variables (configurable in `docker-
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HERMES_HS_URL` | `http://conduwuit:6167` | Homeserver URL |
-| `HERMES_MATRIX_USER` | `@gateway:conduwuit` | Gateway user MXID |
+| `HERMES_HS_URL` | `http://conduit:6167` | Homeserver URL |
+| `HERMES_MATRIX_USER` | `@gateway:conduit` | Gateway user MXID |
 | `HERMES_MATRIX_PASSWORD` | `gateway_password` | Gateway user password |
 | `HERMES_ADMIN_USERNAME` | `admin` | Admin username (optional) |
 | `HERMES_ADMIN_PASSWORD` | `admin_password` | Admin password (optional) |
 
 ## Pytest Fixtures
 
-The test harness provides reusable pytest fixtures in `conftest.py`:
+The test harness provides reusable pytest fixtures in `tests/conftest.py`:
 
 ### Session-scoped Fixtures
 
@@ -120,11 +121,11 @@ Creates a new test room for each test function and automatically cleans it up af
 When implementing new HERMES-GW-N features, follow this pattern:
 
 1. **Create a new test file** under `tests/gateway/`, e.g., `tests/gateway/test_matrix_rooms.py`
-2. **Import fixtures** from `test-harness/conftest.py`:
+2. **Import fixtures** from `tests/conftest.py`:
    ```python
    import pytest
    from mautrix.types import RoomID
-   
+
    @pytest.mark.asyncio
    async def test_my_feature(gateway_client, test_room: RoomID):
        # Your test code here

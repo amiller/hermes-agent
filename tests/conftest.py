@@ -12,8 +12,11 @@ import os
 import pytest
 import pytest_asyncio
 import asyncio
+import logging
 from mautrix.client import Client
 from mautrix.types import UserID, RoomCreatePreset
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session")
@@ -22,21 +25,24 @@ def hs_url() -> str:
     Return the Matrix homeserver URL.
 
     Inside the docker-compose network, the homeserver is accessible
-    as 'conduwuit:6167'.
+    as 'conduit:6167'.
     """
-    return os.environ.get("HERMES_HS_URL", "http://conduwuit:6167")
+    return os.environ.get("HERMES_HS_URL", "http://conduit:6167")
 
 
-@pytest.fixture(scope="session")
-def admin_token(hs_url: str) -> str:
+@pytest_asyncio.fixture
+async def admin_token(hs_url: str) -> str:
     """
     Create and authenticate an admin user, returning the access token.
 
     This fixture runs once per test session to create an admin user
     for the test suite. The admin credentials are from environment
     variables or defaults.
+
+    Note: This fixture is currently unused but available for future tests
+    that require admin privileges.
     """
-    admin_user = UserID("@admin:conduwuit")
+    admin_user = UserID("@admin:conduit")
     admin_password = os.environ.get("HERMES_ADMIN_PASSWORD", "admin_password")
 
     # Create client and login
@@ -45,24 +51,42 @@ def admin_token(hs_url: str) -> str:
     )
     client._mxid = admin_user
 
-    # Register the admin user (if not already exists)
     try:
-        asyncio.run(client.register(
-            username="admin",
+        # Register the admin user (if not already exists)
+        try:
+            await client.register(
+                username="admin",
+                password=admin_password,
+                device_name="pytest-admin"
+            )
+            logger.info("Admin user registered successfully")
+        except Exception as e:
+            # User might already exist, try login instead
+            if "already in use" in str(e) or "User already exists" in str(e):
+                logger.info("Admin user already exists, proceeding to login")
+            elif "network" in str(e).lower() or "timeout" in str(e).lower() or "connection" in str(e).lower():
+                logger.error(f"Network/timeout error during admin registration: {e}")
+                raise
+            else:
+                logger.warning(f"Registration attempt failed (user may exist): {e}")
+
+        # Login to get access token
+        resp = await client.login(
             password=admin_password,
             device_name="pytest-admin"
-        ))
-    except Exception as e:
-        # User might already exist, try login instead
-        pass
+        )
+        logger.info("Admin user logged in successfully")
+        access_token = resp.access_token
 
-    # Login to get access token
-    resp = asyncio.run(client.login(
-        password=admin_password,
-        device_name="pytest-admin"
-    ))
+        yield access_token
 
-    return resp.access_token
+    finally:
+        # Cleanup: disconnect the client to avoid resource leaks
+        try:
+            await client.disconnect()
+            logger.info("Admin client disconnected successfully")
+        except Exception as e:
+            logger.error(f"Error disconnecting admin client: {e}")
 
 
 @pytest_asyncio.fixture
@@ -73,8 +97,8 @@ async def gateway_client(hs_url: str) -> Client:
     This fixture provides a mautrix AsyncClient that is already
     authenticated and ready to use for Matrix operations.
     """
-    gateway_user_str = os.environ.get("HERMES_MATRIX_USER", "@gateway:conduwuit")
-    gateway_localpart = gateway_user_str.split(":")[0][1:]  # Extract "gateway" from "@gateway:conduwuit"
+    gateway_user_str = os.environ.get("HERMES_MATRIX_USER", "@gateway:conduit")
+    gateway_localpart = gateway_user_str.split(":")[0][1:]  # Extract "gateway" from "@gateway:conduit"
     gateway_password = os.environ.get("HERMES_MATRIX_PASSWORD", "gateway_password")
 
     client = Client(
@@ -94,23 +118,39 @@ async def gateway_client(hs_url: str) -> Client:
                 "auth": {"type": "m.login.dummy"}
             }
         )
+        logger.info(f"Gateway user '{gateway_localpart}' registered successfully")
     except Exception as e:
         # User might already exist, try login instead
-        pass
+        if "already in use" in str(e) or "User already exists" in str(e):
+            logger.info(f"Gateway user '{gateway_localpart}' already exists, proceeding to login")
+        elif "network" in str(e).lower() or "timeout" in str(e).lower() or "connection" in str(e).lower():
+            logger.error(f"Network/timeout error during gateway registration: {e}")
+            raise
+        else:
+            logger.warning(f"Registration attempt failed (user may exist): {e}")
 
     # Login
     resp = await client.login(
         password=gateway_password,
         device_name="pytest-gateway"
     )
+    logger.info(f"Gateway user '{gateway_localpart}' logged in successfully")
 
     yield client
 
-    # Cleanup: logout
+    # Cleanup: logout and disconnect to avoid resource leaks
     try:
         await client.logout()
-    except Exception:
-        pass
+        logger.info(f"Gateway user '{gateway_localpart}' logged out successfully")
+    except Exception as e:
+        logger.error(f"Error during gateway logout: {e}")
+    finally:
+        # Always disconnect to avoid resource leaks
+        try:
+            await client.disconnect()
+            logger.info("Gateway client disconnected successfully")
+        except Exception as e:
+            logger.error(f"Error disconnecting gateway client: {e}")
 
 
 @pytest_asyncio.fixture
@@ -121,15 +161,21 @@ async def test_room(gateway_client: Client) -> str:
     This fixture creates a new room for each test that needs it,
     and cleans it up after the test completes.
     """
-    room_id = await gateway_client.create_room(
-        name="Test Room",
-        preset=RoomCreatePreset.PUBLIC
-    )
-
-    yield room_id
-
-    # Cleanup: leave and close the room
     try:
-        await gateway_client.leave_room(room_id)
-    except Exception:
-        pass
+        room_id = await gateway_client.create_room(
+            name="Test Room",
+            preset=RoomCreatePreset.PUBLIC
+        )
+        logger.info(f"Test room created: {room_id}")
+        yield room_id
+    except Exception as e:
+        if "network" in str(e).lower() or "timeout" in str(e).lower() or "connection" in str(e).lower():
+            logger.error(f"Network/timeout error creating test room: {e}")
+        raise
+    finally:
+        # Cleanup: leave the room
+        try:
+            await gateway_client.leave_room(room_id)
+            logger.info(f"Left test room: {room_id}")
+        except Exception as e:
+            logger.error(f"Error leaving test room: {e}")

@@ -1,16 +1,22 @@
 services:
-  conduwuit:
+  conduit:
     image: matrixconduit/matrix-conduit:latest
-    container_name: conduwuit-homeserver
+    container_name: conduit-homeserver
     ports:
       - "6167:6167"
     environment:
       - CONDUIT_CONFIG=/etc/conduit.toml
     volumes:
       - ./conduit.toml:/etc/conduit.toml:ro
-      - conduwuit-data:/var/lib/conduwuit
+      - conduit-data:/var/lib/conduwuit
     networks:
       - matrix-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6167/_matrix/client/versions"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
   gateway:
     build:
@@ -18,15 +24,16 @@ services:
       dockerfile: Dockerfile.gateway
     container_name: hermes-gateway-test
     volumes:
-      - ../:/hermes
+      - ../:/hermes:ro
       - gateway-pip:/root/.cache/pip
     working_dir: /hermes
     environment:
-      - HERMES_HS_URL=http://conduwuit:6167
-      - HERMES_MATRIX_USER=@gateway:conduwuit
+      - HERMES_HS_URL=http://conduit:6167
+      - HERMES_MATRIX_USER=@gateway:conduit
       - HERMES_MATRIX_PASSWORD=gateway_password
     depends_on:
-      - conduwuit
+      conduit:
+        condition: service_healthy
     networks:
       - matrix-test
     command: bash -c "pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir -e . && sleep infinity"
