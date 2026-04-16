@@ -43,5 +43,5 @@ networks:
     driver: bridge
 
 volumes:
-  conduwuit-data:
+  conduit-data:
   gateway-pip:

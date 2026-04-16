@@ -87,8 +87,6 @@ The gateway container uses these environment variables (configurable in `docker-
 | `HERMES_HS_URL` | `http://conduit:6167` | Homeserver URL |
 | `HERMES_MATRIX_USER` | `@gateway:conduit` | Gateway user MXID |
 | `HERMES_MATRIX_PASSWORD` | `gateway_password` | Gateway user password |
-| `HERMES_ADMIN_USERNAME` | `admin` | Admin username (optional) |
-| `HERMES_ADMIN_PASSWORD` | `admin_password` | Admin password (optional) |
 
 ## Pytest Fixtures
 
@@ -98,15 +96,6 @@ The test harness provides reusable pytest fixtures in `tests/conftest.py`:
 
 #### `hs_url()`
 Returns the homeserver URL from environment or default.
-
-#### `admin_username()` / `admin_password()`
-Admin credentials for test setup (optional).
-
-#### `gateway_username()` / `gateway_password()`
-Gateway user credentials for testing.
-
-#### `admin_client()` (async)
-Creates and authenticates an admin Matrix client with privileges for test setup.
 
 #### `gateway_client()` (async)
 Creates and authenticates the gateway Matrix client, handling registration if needed.
@@ -138,7 +127,6 @@ When implementing new HERMES-GW-N features, follow this pattern:
 4. **Use the fixtures**:
    - `gateway_client`: Already authenticated Matrix client
    - `test_room`: Auto-created and auto-cleaned room
-   - `admin_client`: For admin operations if needed
 
 ## Troubleshooting
 

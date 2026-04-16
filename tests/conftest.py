@@ -3,7 +3,6 @@ Pytest fixtures for Matrix gateway integration tests.
 
 These fixtures provide a common setup for all HERMES-GW-N tests:
 - hs_url: The Matrix homeserver URL
-- admin_token: An authenticated admin user token
 - gateway_client: A logged-in mautrix AsyncClient as the gateway user
 - test_room: A test room for sending/receiving messages
 """
@@ -28,65 +27,6 @@ def hs_url() -> str:
     as 'conduit:6167'.
     """
     return os.environ.get("HERMES_HS_URL", "http://conduit:6167")
-
-
-@pytest_asyncio.fixture
-async def admin_token(hs_url: str) -> str:
-    """
-    Create and authenticate an admin user, returning the access token.
-
-    This fixture runs once per test session to create an admin user
-    for the test suite. The admin credentials are from environment
-    variables or defaults.
-
-    Note: This fixture is currently unused but available for future tests
-    that require admin privileges.
-    """
-    admin_user = UserID("@admin:conduit")
-    admin_password = os.environ.get("HERMES_ADMIN_PASSWORD", "admin_password")
-
-    # Create client and login
-    client = Client(
-        base_url=hs_url,
-    )
-    client._mxid = admin_user
-
-    try:
-        # Register the admin user (if not already exists)
-        try:
-            await client.register(
-                username="admin",
-                password=admin_password,
-                device_name="pytest-admin"
-            )
-            logger.info("Admin user registered successfully")
-        except Exception as e:
-            # User might already exist, try login instead
-            if "already in use" in str(e) or "User already exists" in str(e):
-                logger.info("Admin user already exists, proceeding to login")
-            elif "network" in str(e).lower() or "timeout" in str(e).lower() or "connection" in str(e).lower():
-                logger.error(f"Network/timeout error during admin registration: {e}")
-                raise
-            else:
-                logger.warning(f"Registration attempt failed (user may exist): {e}")
-
-        # Login to get access token
-        resp = await client.login(
-            password=admin_password,
-            device_name="pytest-admin"
-        )
-        logger.info("Admin user logged in successfully")
-        access_token = resp.access_token
-
-        yield access_token
-
-    finally:
-        # Cleanup: disconnect the client to avoid resource leaks
-        try:
-            await client.disconnect()
-            logger.info("Admin client disconnected successfully")
-        except Exception as e:
-            logger.error(f"Error disconnecting admin client: {e}")
 
 
 @pytest_asyncio.fixture
