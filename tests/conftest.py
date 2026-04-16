@@ -78,19 +78,12 @@ async def gateway_client(hs_url: str) -> Client:
 
     yield client
 
-    # Cleanup: logout and disconnect to avoid resource leaks
+    # Cleanup: logout to avoid resource leaks
     try:
         await client.logout()
         logger.info(f"Gateway user '{gateway_localpart}' logged out successfully")
     except Exception as e:
         logger.error(f"Error during gateway logout: {e}")
-    finally:
-        # Always disconnect to avoid resource leaks
-        try:
-            await client.disconnect()
-            logger.info("Gateway client disconnected successfully")
-        except Exception as e:
-            logger.error(f"Error disconnecting gateway client: {e}")
 
 
 @pytest_asyncio.fixture

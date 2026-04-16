@@ -1,6 +1,6 @@
 [global]
 server_name = "conduit"
-database_path = "/var/lib/conduwuit"
+database_path = "/var/lib/conduit"
 database_backend = "rocksdb"
 address = "0.0.0.0"
 port = 6167

@@ -11,12 +11,6 @@ services:
       - conduit-data:/var/lib/conduit
     networks:
       - matrix-test
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6167/_matrix/client/versions"]
-      interval: 5s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
 
   gateway:
     build:
@@ -24,7 +18,7 @@ services:
       dockerfile: Dockerfile.gateway
     container_name: hermes-gateway-test
     volumes:
-      - ../:/hermes:ro
+      - ../:/hermes
       - gateway-pip:/root/.cache/pip
     working_dir: /hermes
     environment:
@@ -32,8 +26,7 @@ services:
       - HERMES_MATRIX_USER=@gateway:conduit
       - HERMES_MATRIX_PASSWORD=gateway_password
     depends_on:
-      conduit:
-        condition: service_healthy
+      - conduit
     networks:
       - matrix-test
     command: bash -c "pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir -e . && sleep infinity"

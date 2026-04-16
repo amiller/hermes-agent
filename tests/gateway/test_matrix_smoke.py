@@ -13,9 +13,8 @@ more advanced HERMES-GW-N tests.
 
 import pytest
 import asyncio
-from mautrix.types import RoomID, EventID, EventType
+from mautrix.types import RoomID, EventID, EventType, PaginationDirection
 from mautrix.client import Client
-from mautrix import events
 from typing import Tuple
 
 
@@ -50,21 +49,16 @@ async def test_gateway_can_create_room_and_send_message(
     # Read back the message from the room history
     messages_resp = await gateway_client.get_messages(
         room_id=test_room,
-        direction="b",
+        direction=PaginationDirection.BACKWARD,
         limit=10
     )
 
     # Find our test message in the results
     found_message = None
-    for event in messages_resp.chunk:
+    for event in messages_resp.events:
         if event.event_id == event_id:
-            # Check if this is a message event
-            if isinstance(event, events.Event):
-                if hasattr(event, 'content') and hasattr(event.content, 'body'):
-                    found_message = event.content.body
-                    break
-            # Also check for message event types directly
-            elif hasattr(event, 'content'):
+            # Check if this is a message event with body content
+            if hasattr(event, 'content'):
                 content = event.content
                 if hasattr(content, 'body'):
                     found_message = content.body
