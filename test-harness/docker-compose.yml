@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  conduwuit:
+    image: girlbossceo/conduwuit:latest
+    container_name: conduwuit-homeserver
+    ports:
+      - "6167:6167"
+    environment:
+      - CONDUWUIT_SERVER_NAME=conduwuit
+      - CONDUWUIT_ALLOW_REGISTRATION=true
+      - CONDUWUIT_ALLOW_PUBLIC_ROOMS_OVER_FEDERATION=false
+      - CONDUWUIT_DATABASE_BACKEND=rocksdb
+      - CONDUWUIT_DATABASE_PATH=/var/lib/conduwuit
+    volumes:
+      - conduwuit-data:/var/lib/conduwuit
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6167/_matrix/client/versions"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+    networks:
+      - matrix-test
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: hermes-gateway-test
+    volumes:
+      - ../:/hermes:ro
+    working_dir: /hermes
+    environment:
+      - HERMES_HS_URL=http://conduwuit:6167
+      - HERMES_MATRIX_USER=@gateway:conduwuit
+      - HERMES_MATRIX_PASSWORD=gateway_password
+    depends_on:
+      conduwuit:
+        condition: service_healthy
+    networks:
+      - matrix-test
+    command: sleep infinity
+
+networks:
+  matrix-test:
+    driver: bridge
+
+volumes:
+  conduwuit-data:
