@@ -60,7 +60,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
         )
     try:
         nonce = secrets.token_hex(32)
-        url = f"{base_url}/v1/attestation/report"
+        url = f"{base_url}/attestation/report"
         params = {"nonce": nonce, "signing_algo": "ecdsa", "include_tls_fingerprint": "true"}
         headers = {"Authorization": f"Bearer {api_key}"}
         response = requests.get(url, params=params, headers=headers, timeout=30)
@@ -79,6 +79,16 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
                 valid=False, provider="near-ai", attestation_type="tdx",
                 verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 details={"intel_result": intel_result}, error="Invalid TDX quote: verification failed"
+            )
+        platform_status = intel_result.get("platform_status", {}).get("status", "Unknown")
+        if platform_status != "UpToDate":
+            advisories = intel_result.get("platform_status", {}).get("advisory_ids", [])
+            return AttestationReport(
+                valid=False, provider="near-ai", attestation_type="tdx",
+                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                details={"platform_status": platform_status, "advisory_ids": advisories,
+                         "ppid": intel_result.get("ppid")},
+                error=f"Platform TCB out of date: {platform_status} advisories={advisories}"
             )
         report_data_result = check_report_data(gateway_attestation, nonce, intel_result)
         if not report_data_result.get("binds_address", False):
@@ -117,7 +127,11 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             details={
                 "signing_address": gateway_attestation.get("signing_address"),
                 "tls_cert_fingerprint": gateway_attestation.get("tls_cert_fingerprint"),
-                "acme_account": gateway_attestation.get("acme_account"), "domain": domain
+                "acme_account": gateway_attestation.get("acme_account"), "domain": domain,
+                "app_id": gateway_attestation.get("info", {}).get("app_id"),
+                "instance_id": gateway_attestation.get("info", {}).get("instance_id"),
+                "platform_status": platform_status,
+                "ppid": intel_result.get("ppid"),
             }
         )
     except Exception as e:
