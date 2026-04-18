@@ -2934,6 +2934,15 @@ def read_raw_config() -> Dict[str, Any]:
     return {}
 
 
+def get_attestation_config(provider_id: str) -> Dict[str, Any]:
+    """Load attestation configuration for a provider from model.attestation.* in config.yaml."""
+    config = load_config()
+    attestation_cfg = config.get("model", {}).get("attestation")
+    if isinstance(attestation_cfg, dict):
+        return {"enabled": attestation_cfg.get("enabled", False), "strict": attestation_cfg.get("strict", False)}
+    return {"enabled": False, "strict": False}
+
+
 def load_config() -> Dict[str, Any]:
     """Load configuration from ~/.hermes/config.yaml."""
     ensure_hermes_home()
