@@ -205,6 +205,10 @@ def _resolve_runtime_from_pool_entry(
                 raise RuntimeError(f"TEE attestation failed: {report.error}")
             if not report.valid:
                 logger.warning("TEE attestation warning: %s", report.error)
+            elif report.signing_public_key:
+                from hermes_cli.e2ee_proxy import E2EEProxy
+                proxy = E2EEProxy(report.signing_public_key, report.signing_algo, base_url)
+                base_url = proxy.base_url
     elif provider == "redpill":
         api_mode = "chat_completions"
         if not base_url:
@@ -221,6 +225,10 @@ def _resolve_runtime_from_pool_entry(
                 raise RuntimeError(f"TEE attestation failed: {report.error}")
             if not report.valid:
                 logger.warning("TEE attestation warning: %s", report.error)
+            elif report.signing_public_key:
+                from hermes_cli.e2ee_proxy import E2EEProxy
+                proxy = E2EEProxy(report.signing_public_key, report.signing_algo, base_url)
+                base_url = proxy.base_url
     elif provider == "copilot":
         api_mode = _copilot_runtime_api_mode(model_cfg, getattr(entry, "runtime_api_key", ""))
         base_url = base_url or PROVIDER_REGISTRY["copilot"].inference_base_url
