@@ -199,7 +199,7 @@ def _resolve_runtime_from_pool_entry(
                 api_key = creds.get("api_key", "")
         att_config = get_attestation_config("near-ai")
         if att_config.get("enabled"):
-            att_creds = {"api_key": api_key, "base_url": base_url}
+            att_creds = {"api_key": api_key, "base_url": base_url, "model": str(model_cfg.get("default") or "openai/gpt-oss-120b")}
             report = _verify_attestation("near-ai", att_creds, att_config)
             if not report.valid and att_config.get("strict"):
                 raise RuntimeError(f"TEE attestation failed: {report.error}")

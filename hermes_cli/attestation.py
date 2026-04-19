@@ -140,9 +140,10 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             details={}, error="No API key in runtime credentials"
         )
 
+    model = runtime_creds.get("model", "openai/gpt-oss-120b")
     nonce = secrets.token_hex(32)
     url = f"{base_url}/v1/attestation/report"
-    params = {"nonce": nonce, "signing_algo": "ecdsa", "include_tls_fingerprint": "true"}
+    params = {"model": model, "nonce": nonce, "signing_algo": "ecdsa", "include_tls_fingerprint": "true"}
     response = requests.get(url, params=params, headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
     response.raise_for_status()
     report = response.json()
@@ -198,6 +199,8 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
 
     gw_status = gw_intel.get("status", "Unknown")
     gw_advisories = gw_intel.get("advisory_ids", [])
+    if gw_status == "OutOfDate":
+        logger.warning("Gateway platform TCB is OutOfDate (advisories: %s) — quote is valid but firmware is unpatched", ", ".join(gw_advisories) or "none")
 
     # ── Model attestations ───────────────────────────────────────────────────
     model_atts = report.get("model_attestations") or []
@@ -270,11 +273,16 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             if i == 0:
                 model_signing_key = spk
 
+        m_status = m_intel.get("status", "Unknown")
+        m_advisories = m_intel.get("advisory_ids", [])
+        if m_status == "OutOfDate":
+            logger.warning("Model attestation #%d platform TCB is OutOfDate (advisories: %s) — quote is valid but firmware is unpatched", i + 1, ", ".join(m_advisories) or "none")
+
         model_details.append({
             "signing_address": signing_addr,
             "app_id": info.get("app_id"),
-            "status": m_intel.get("status"),
-            "advisory_ids": m_intel.get("advisory_ids", []),
+            "status": m_status,
+            "advisory_ids": m_advisories,
             "compose_hash_verified": compose_verified,
             "gpu_verdict": gpu_result.get("verdict"),
         })
