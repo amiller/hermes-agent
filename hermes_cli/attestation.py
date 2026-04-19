@@ -133,6 +133,9 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
     """Verify NEAR AI Cloud TEE attestation: gateway + model TDX quotes, GPU, E2EE key binding."""
     api_key = runtime_creds.get("api_key", "")
     base_url = runtime_creds.get("base_url", "https://cloud-api.near.ai").rstrip("/")
+    # base_url may include /v1 (the OpenAI inference path); strip it for the attestation endpoint
+    if base_url.endswith("/v1"):
+        base_url = base_url[:-3]
     if not api_key:
         return AttestationReport(
             valid=False, provider="near-ai", attestation_type="tdx",
