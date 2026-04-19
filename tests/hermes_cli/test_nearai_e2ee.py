@@ -259,38 +259,46 @@ class TestPhalaReportData:
 
 import os
 
-@pytest.mark.skipif(
-    not os.environ.get("NEAR_API_KEY"),
-    reason="NEAR_API_KEY not set — live attestation test skipped"
-)
+
+def _near_api_key():
+    """Read NEAR_API_KEY from env or ~/.hermes-near-test/.env (survives pytest env isolation)."""
+    key = os.environ.get("NEAR_API_KEY", "")
+    if key:
+        return key
+    env_file = os.path.expanduser("~/.hermes-near-test/.env")
+    if os.path.exists(env_file):
+        for line in open(env_file):
+            if line.startswith("NEAR_API_KEY="):
+                return line.strip().split("=", 1)[1]
+    return ""
+
+
+@pytest.mark.skipif(not _near_api_key(), reason="NEAR_API_KEY not found — live attestation test skipped")
 class TestNearAILiveAttestation:
     def test_full_attestation_returns_signing_key(self):
         from hermes_cli.attestation import verify_attestation
-        creds = {
-            "api_key": os.environ["NEAR_API_KEY"],
-            "base_url": "https://cloud-api.near.ai",
-        }
-        report = verify_attestation("near-ai", creds, {"enabled": True, "strict": True})
+        api_key = _near_api_key()
+        report = verify_attestation("near-ai", {"api_key": api_key, "base_url": "https://cloud-api.near.ai", "model": "openai/gpt-oss-120b"}, {"enabled": True, "strict": True})
         assert report.valid, f"Attestation failed: {report.error}"
         assert report.signing_public_key is not None
         assert len(bytes.fromhex(report.signing_public_key)) == 64
 
     def test_e2ee_proxy_with_live_key(self):
         from hermes_cli.attestation import verify_attestation
-        creds = {
-            "api_key": os.environ["NEAR_API_KEY"],
-            "base_url": "https://cloud-api.near.ai",
-        }
-        report = verify_attestation("near-ai", creds, {"enabled": True})
+        api_key = _near_api_key()
+        report = verify_attestation("near-ai", {"api_key": api_key, "base_url": "https://cloud-api.near.ai", "model": "openai/gpt-oss-120b"}, {"enabled": True})
         assert report.signing_public_key
         proxy = E2EEProxy(report.signing_public_key, report.signing_algo, "https://cloud-api.near.ai")
         resp = requests.post(
             f"{proxy.base_url}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {os.environ['NEAR_API_KEY']}"},
-            json={"model": "openai/gpt-oss-120b", "messages": [{"role": "user", "content": "say hi"}], "max_tokens": 5},
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": "openai/gpt-oss-120b", "messages": [{"role": "user", "content": "say hi"}], "max_tokens": 100},
             timeout=60,
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["choices"][0]["message"]["content"]
+        msg = data["choices"][0]["message"]
+        # gpt-oss-120b is a reasoning model; response arrives in reasoning_content, content may be None
+        response_text = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning")
+        assert response_text, f"No response text in message fields: {list(msg.keys())}"
         proxy.shutdown()
