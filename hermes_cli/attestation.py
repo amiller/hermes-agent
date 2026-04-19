@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 _PHALA_TDX_VERIFIER = "https://cloud-api.phala.network/api/v1/attestations/verify"
 _NVIDIA_NRAS = "https://nras.attestation.nvidia.com/v3/attest/gpu"
 
-# Add vendored verifier modules to path
-vendor_path = os.path.join(os.path.dirname(__file__), "..", "examples", "tee-providers", "vendor", "nearai-cloud-verifier", "py")
+# Add vendored verifier modules to path.
+# Default: alongside this repo at refs/nearai-cloud-verifier/py; override with NEARAI_VERIFIER_PATH.
+_default_verifier_path = os.path.join(os.path.dirname(__file__), "..", "..", "hermes-agent", "refs", "nearai-cloud-verifier", "py")
+vendor_path = os.environ.get("NEARAI_VERIFIER_PATH", _default_verifier_path)
 if vendor_path not in sys.path:
     sys.path.insert(0, vendor_path)
 
