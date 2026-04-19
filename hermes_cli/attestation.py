@@ -33,7 +33,7 @@ if vendor_path not in sys.path:
 
 _VERIFIER_AVAILABLE = False
 try:
-    from model_verifier import check_tdx_quote, check_report_data
+    from model_verifier import check_tdx_quote, check_report_data, check_gpu
     from domain_verifier import DomainAttestation, verify_domain_attestation
     _VERIFIER_AVAILABLE = True
 except ImportError:
@@ -53,6 +53,8 @@ class AttestationReport:
     details: Dict[str, Any]
     error: Optional[str] = None
     verifier_output: str = ""  # captured stdout from verifier; shown when verbose
+    signing_public_key: Optional[str] = None
+    signing_algo: str = "ecdsa"
 
 
 # Cache: {(provider_id, base_url): (report, verified_at_ms, pinned_cert_fingerprint)}
@@ -128,7 +130,7 @@ def verify_attestation(provider_id: str, runtime_creds: Dict[str, Any], config: 
 
 
 def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str, Any]) -> AttestationReport:
-    """Verify NEAR AI Cloud TEE attestation."""
+    """Verify NEAR AI Cloud TEE attestation: gateway + model TDX quotes, GPU, E2EE key binding."""
     api_key = runtime_creds.get("api_key", "")
     base_url = runtime_creds.get("base_url", "https://cloud-api.near.ai").rstrip("/")
     if not api_key:
@@ -137,103 +139,164 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             details={}, error="No API key in runtime credentials"
         )
-    try:
-        nonce = secrets.token_hex(32)
-        url = f"{base_url}/attestation/report"
-        params = {"nonce": nonce, "signing_algo": "ecdsa", "include_tls_fingerprint": "true"}
-        headers = {"Authorization": f"Bearer {api_key}"}
-        response = requests.get(url, params=params, headers=headers, timeout=30)
-        response.raise_for_status()
-        report = response.json()
-        gateway_attestation = report.get("gateway_attestation", {})
-        if not gateway_attestation:
-            return AttestationReport(
-                valid=False, provider="near-ai", attestation_type="tdx",
-                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                details={"report": report}, error="No gateway_attestation in response"
-            )
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            intel_result = asyncio.run(check_tdx_quote(gateway_attestation))
-        verifier_out = buf.getvalue()
 
-        if not intel_result.get("verified", False):
-            return AttestationReport(
-                valid=False, provider="near-ai", attestation_type="tdx",
-                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                details={"intel_result": intel_result}, error="Invalid TDX quote: verification failed",
-                verifier_output=verifier_out,
-            )
-        platform_status = intel_result.get("platform_status", {}).get("status", "Unknown")
-        if platform_status != "UpToDate":
-            advisories = intel_result.get("platform_status", {}).get("advisory_ids", [])
-            return AttestationReport(
-                valid=False, provider="near-ai", attestation_type="tdx",
-                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                details={"platform_status": platform_status, "advisory_ids": advisories,
-                         "ppid": intel_result.get("ppid")},
-                error=f"Platform TCB out of date: {platform_status} advisories={advisories}",
-                verifier_output=verifier_out,
-            )
-        buf2 = io.StringIO()
-        with contextlib.redirect_stdout(buf2):
-            report_data_result = check_report_data(gateway_attestation, nonce, intel_result)
-        verifier_out += buf2.getvalue()
+    nonce = secrets.token_hex(32)
+    url = f"{base_url}/v1/attestation/report"
+    params = {"nonce": nonce, "signing_algo": "ecdsa", "include_tls_fingerprint": "true"}
+    response = requests.get(url, params=params, headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
+    response.raise_for_status()
+    report = response.json()
+    verifier_out = ""
+    now = lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        if not report_data_result.get("binds_address", False):
-            return AttestationReport(
-                valid=False, provider="near-ai", attestation_type="tdx",
-                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                details={"report_data_result": report_data_result},
-                error="Report data does not bind signing address + TLS fingerprint",
-                verifier_output=verifier_out,
-            )
-        if not report_data_result.get("embeds_nonce", False):
-            return AttestationReport(
-                valid=False, provider="near-ai", attestation_type="tdx",
-                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                details={"report_data_result": report_data_result},
-                error="Report data does not embed request nonce",
-                verifier_output=verifier_out,
-            )
-        tls_certificate = report.get("tls_certificate", "")
-        if not tls_certificate:
-            return AttestationReport(
-                valid=False, provider="near-ai", attestation_type="tdx",
-                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                details={"report": report}, error="No tls_certificate in response",
-                verifier_output=verifier_out,
-            )
-        domain = urlparse(base_url).netloc
-        domain_attestation = DomainAttestation(
-            domain=domain, sha256sum=gateway_attestation.get("tls_cert_fingerprint", ""),
-            acme_account=gateway_attestation.get("acme_account", ""), cert=tls_certificate,
-            intel_quote=gateway_attestation.get("intel_quote", ""), info=gateway_attestation
-        )
-        buf3 = io.StringIO()
-        with contextlib.redirect_stdout(buf3):
-            try:
-                asyncio.run(verify_domain_attestation(domain_attestation))
-            except Exception:
-                pass
-        verifier_out += buf3.getvalue()
-
+    def _fail(error, details=None):
         return AttestationReport(
-            valid=True, provider="near-ai", attestation_type="tdx",
-            verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            details={
-                "signing_address": gateway_attestation.get("signing_address"),
-                "tls_cert_fingerprint": gateway_attestation.get("tls_cert_fingerprint"),
-                "acme_account": gateway_attestation.get("acme_account"), "domain": domain,
-                "app_id": gateway_attestation.get("info", {}).get("app_id"),
-                "instance_id": gateway_attestation.get("info", {}).get("instance_id"),
-                "platform_status": platform_status,
-                "ppid": intel_result.get("ppid"),
-            },
+            valid=False, provider="near-ai", attestation_type="tdx",
+            verified_at=now(), details=details or {}, error=error,
             verifier_output=verifier_out,
         )
-    except Exception:
-        raise
+
+    # ── Gateway attestation ──────────────────────────────────────────────────
+    gateway = report.get("gateway_attestation", {})
+    if not gateway:
+        return _fail("No gateway_attestation in response")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        gw_intel = asyncio.run(check_tdx_quote(gateway))
+    verifier_out += buf.getvalue()
+
+    if not gw_intel or not gw_intel.get("verified", False):
+        return _fail("Gateway TDX quote verification failed", {"intel_result": gw_intel})
+
+    buf2 = io.StringIO()
+    with contextlib.redirect_stdout(buf2):
+        gw_rd = check_report_data(gateway, nonce, gw_intel)
+    verifier_out += buf2.getvalue()
+
+    if not gw_rd.get("binds_address"):
+        return _fail("Gateway report_data does not bind signing address + TLS fingerprint")
+    if not gw_rd.get("embeds_nonce"):
+        return _fail("Gateway report_data does not embed request nonce")
+
+    tls_certificate = report.get("tls_certificate", "")
+    if not tls_certificate:
+        return _fail("No tls_certificate in response")
+
+    domain = urlparse(base_url).netloc
+    buf3 = io.StringIO()
+    with contextlib.redirect_stdout(buf3):
+        try:
+            asyncio.run(verify_domain_attestation(DomainAttestation(
+                domain=domain, sha256sum=gateway.get("tls_cert_fingerprint", ""),
+                acme_account=gateway.get("acme_account", ""), cert=tls_certificate,
+                intel_quote=gateway.get("intel_quote", ""), info=gateway
+            )))
+        except Exception:
+            pass
+    verifier_out += buf3.getvalue()
+
+    gw_status = gw_intel.get("status", "Unknown")
+    gw_advisories = gw_intel.get("advisory_ids", [])
+
+    # ── Model attestations ───────────────────────────────────────────────────
+    model_atts = report.get("model_attestations") or []
+    if not model_atts:
+        return _fail("No model_attestations in response — cannot verify E2EE key")
+
+    model_signing_key = None
+    model_details = []
+
+    for i, model_att in enumerate(model_atts):
+        buf_m = io.StringIO()
+        with contextlib.redirect_stdout(buf_m):
+            m_intel = asyncio.run(check_tdx_quote(model_att))
+        verifier_out += buf_m.getvalue()
+
+        if not m_intel or not m_intel.get("verified", False):
+            return _fail(f"Model attestation #{i+1} TDX quote verification failed")
+
+        buf_m2 = io.StringIO()
+        with contextlib.redirect_stdout(buf_m2):
+            m_rd = check_report_data(model_att, nonce, m_intel)
+        verifier_out += buf_m2.getvalue()
+
+        if not m_rd.get("binds_address"):
+            return _fail(f"Model attestation #{i+1} report_data does not bind signing address + nonce")
+        if not m_rd.get("embeds_nonce"):
+            return _fail(f"Model attestation #{i+1} report_data does not embed request nonce")
+
+        if not model_att.get("nvidia_payload"):
+            return _fail(f"Model attestation #{i+1} missing nvidia_payload — GPU attestation required")
+        buf_m3 = io.StringIO()
+        with contextlib.redirect_stdout(buf_m3):
+            gpu_result = check_gpu(model_att, nonce)
+        verifier_out += buf_m3.getvalue()
+
+        if gpu_result.get("verdict") not in ("PASS", True):
+            return _fail(f"Model attestation #{i+1} GPU verification failed: {gpu_result.get('verdict')}")
+        if not gpu_result.get("nonce_matches"):
+            return _fail(f"Model attestation #{i+1} GPU nonce mismatch")
+
+        # compose hash for model CVM
+        info = model_att.get("info", {})
+        tcb_info = info.get("tcb_info", {})
+        if isinstance(tcb_info, str):
+            try:
+                tcb_info = _json.loads(tcb_info)
+            except Exception:
+                tcb_info = {}
+        app_compose = tcb_info.get("app_compose") if tcb_info else None
+        m_mr_config = m_intel.get("quote", {}).get("body", {}).get("mrconfig", "")
+        compose_verified = False
+        if app_compose and m_mr_config:
+            compose_hash = hashlib.sha256(app_compose.encode()).hexdigest()
+            compose_verified = m_mr_config.lower().startswith(("01" + compose_hash).lower())
+
+        # verify signing_public_key derives to signing_address (so we know the E2EE key is hardware-bound)
+        spk = model_att.get("signing_public_key")
+        signing_addr = model_att.get("signing_address", "")
+        if spk and signing_addr:
+            from eth_keys.datatypes import PublicKey as _EthPubKey
+            pub_bytes = bytes.fromhex(spk)
+            if len(pub_bytes) == 65 and pub_bytes[0] == 0x04:
+                pub_bytes = pub_bytes[1:]
+            derived = "0x" + _EthPubKey(pub_bytes).to_canonical_address().hex()
+            if derived.lower() != signing_addr.lower():
+                return _fail(
+                    f"Model attestation #{i+1} signing_public_key does not derive to signing_address",
+                    {"derived": derived, "claimed": signing_addr},
+                )
+            if i == 0:
+                model_signing_key = spk
+
+        model_details.append({
+            "signing_address": signing_addr,
+            "app_id": info.get("app_id"),
+            "status": m_intel.get("status"),
+            "advisory_ids": m_intel.get("advisory_ids", []),
+            "compose_hash_verified": compose_verified,
+            "gpu_verdict": gpu_result.get("verdict"),
+        })
+
+    return AttestationReport(
+        valid=True, provider="near-ai", attestation_type="tdx+gpu",
+        verified_at=now(),
+        details={
+            "gateway": {
+                "signing_address": gateway.get("signing_address"),
+                "tls_cert_fingerprint": gateway.get("tls_cert_fingerprint"),
+                "domain": domain,
+                "app_id": gateway.get("info", {}).get("app_id"),
+                "status": gw_status,
+                "advisory_ids": gw_advisories,
+            },
+            "models": model_details,
+        },
+        signing_public_key=model_signing_key,
+        signing_algo="ecdsa",
+        verifier_output=verifier_out,
+    )
 
 
 def _decode_nvidia_verdict(jwt_token: str) -> str:
@@ -352,6 +415,7 @@ def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
                     details={"gpu_verdict": gpu_verdict}, error=f"NVIDIA GPU attestation failed: {gpu_verdict}"
                 )
 
+    model_signing_key = model_atts[0].get("signing_public_key") if model_atts else None
     return AttestationReport(
         valid=True, provider="redpill", attestation_type="tdx+gpu",
         verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -363,6 +427,8 @@ def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             "app_id": info.get("app_id"),
             "instance_id": info.get("instance_id"),
         },
+        signing_public_key=model_signing_key,
+        signing_algo=signing_algo,
     )
 
 
