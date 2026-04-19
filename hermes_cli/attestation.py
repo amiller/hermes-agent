@@ -102,14 +102,15 @@ def verify_attestation(provider_id: str, runtime_creds: Dict[str, Any], config: 
 
     if provider_id == "redpill":
         report = _verify_redpill_attestation(runtime_creds, config)
-    elif not _VERIFIER_AVAILABLE:
-        return AttestationReport(
-            valid=False, provider=provider_id, attestation_type="none",
-            verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            details={}, error="Attestation verifier dependencies not available"
-        )
     elif provider_id == "near-ai":
-        report = _verify_near_ai_attestation(runtime_creds, config)
+        if not _VERIFIER_AVAILABLE:
+            return AttestationReport(
+                valid=False, provider=provider_id, attestation_type="none",
+                verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                details={}, error="Attestation verifier dependencies not available"
+            )
+        else:
+            report = _verify_near_ai_attestation(runtime_creds, config)
     else:
         report = _skip_attestation("not-implemented")
 
@@ -257,7 +258,9 @@ def _phala_check_report_data(report_data_hex: str, signing_address: str, signing
 def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str, Any]) -> AttestationReport:
     """Verify Redpill/Phala TEE attestation: TDX quote + compose hash + NVIDIA GPU."""
     api_key = runtime_creds.get("api_key", "")
-    base_url = runtime_creds.get("base_url", "https://api.red-pill.ai").rstrip("/")
+    base_url = runtime_creds.get("base_url", "https://api.red-pill.ai/v1").rstrip("/")
+    # strip trailing /v1 so we can append it consistently
+    api_base = base_url[:-3] if base_url.endswith("/v1") else base_url
     model = runtime_creds.get("model", "")
     if not api_key:
         return AttestationReport(
@@ -272,7 +275,7 @@ def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             details={}, error="No model in runtime credentials"
         )
     nonce = secrets.token_hex(32)
-    url = f"{base_url}/v1/attestation/report"
+    url = f"{api_base}/v1/attestation/report"
     response = requests.get(url, params={"model": model, "nonce": nonce},
                             headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
     response.raise_for_status()
