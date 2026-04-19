@@ -102,7 +102,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         is_stream = payload.get("stream", False)
         upstream_url = self.server.upstream_base_url.rstrip("/") + self.path
-        resp = requests.post(upstream_url, headers=fwd_headers, data=new_body, stream=is_stream, timeout=120)
+        # For streaming, use no timeout — let the caller's connection govern it.
+        # For non-streaming, 120s is plenty.
+        upstream_timeout = None if is_stream else 120
+        resp = requests.post(upstream_url, headers=fwd_headers, data=new_body, stream=is_stream, timeout=upstream_timeout)
 
         self.send_response(resp.status_code)
         for k, v in resp.headers.items():
