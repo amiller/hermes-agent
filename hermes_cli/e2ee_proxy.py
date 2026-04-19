@@ -113,18 +113,25 @@ class _Handler(BaseHTTPRequestHandler):
         if is_stream:
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
-            for raw in resp.iter_lines(keep_blank_lines=True):
-                line = raw.decode() if isinstance(raw, bytes) else (raw or "")
-                if line.startswith("data: {"):
-                    data = json.loads(line[6:])
-                    for choice in data.get("choices", []):
-                        delta = choice.get("delta", {})
-                        if delta.get("content"):
-                            delta["content"] = _decrypt_content(
-                                delta["content"], priv_key, self.server.signing_algo
-                            )
-                    line = "data: " + json.dumps(data)
-                self.wfile.write((line + "\n").encode())
+            pending = b""
+            for chunk in resp.iter_content(chunk_size=4096):
+                pending += chunk
+                while b"\n" in pending:
+                    raw, pending = pending.split(b"\n", 1)
+                    line = raw.decode("utf-8", errors="replace")
+                    if line.startswith("data: {"):
+                        data = json.loads(line[6:])
+                        for choice in data.get("choices", []):
+                            delta = choice.get("delta", {})
+                            if delta.get("content"):
+                                delta["content"] = _decrypt_content(
+                                    delta["content"], priv_key, self.server.signing_algo
+                                )
+                        line = "data: " + json.dumps(data)
+                    self.wfile.write((line + "\n").encode())
+                    self.wfile.flush()
+            if pending:
+                self.wfile.write(pending)
                 self.wfile.flush()
         else:
             data = resp.json()
