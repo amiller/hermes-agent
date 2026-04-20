@@ -771,7 +771,7 @@ def switch_model(
 
     if provider_changed or explicit_provider:
         try:
-            runtime = resolve_runtime_provider(requested=target_provider)
+            runtime = resolve_runtime_provider(requested=target_provider, explicit_model=new_model)
             api_key = runtime.get("api_key", "")
             base_url = runtime.get("base_url", "")
             api_mode = runtime.get("api_mode", "")
