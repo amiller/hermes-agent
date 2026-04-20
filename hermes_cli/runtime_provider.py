@@ -161,6 +161,7 @@ def _resolve_runtime_from_pool_entry(
     base_url = (getattr(entry, "runtime_base_url", None) or getattr(entry, "base_url", None) or "").rstrip("/")
     api_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
     api_mode = "chat_completions"
+    e2ee_config: Optional[Dict[str, Any]] = None
     if provider == "openai-codex":
         api_mode = "codex_responses"
         base_url = base_url or DEFAULT_CODEX_BASE_URL
@@ -199,9 +200,10 @@ def _resolve_runtime_from_pool_entry(
             if not report.valid:
                 logger.warning("TEE attestation warning: %s", report.error)
             elif report.signing_public_key:
-                from hermes_cli.e2ee_proxy import E2EEProxy
-                proxy = E2EEProxy(report.signing_public_key, report.signing_algo, base_url)
-                base_url = proxy.base_url
+                e2ee_config = {
+                    "signing_public_key": report.signing_public_key,
+                    "signing_algo": report.signing_algo,
+                }
     elif provider == "redpill":
         api_mode = "chat_completions"
         if not base_url:
@@ -219,9 +221,10 @@ def _resolve_runtime_from_pool_entry(
             if not report.valid:
                 logger.warning("TEE attestation warning: %s", report.error)
             elif report.signing_public_key:
-                from hermes_cli.e2ee_proxy import E2EEProxy
-                proxy = E2EEProxy(report.signing_public_key, report.signing_algo, base_url)
-                base_url = proxy.base_url
+                e2ee_config = {
+                    "signing_public_key": report.signing_public_key,
+                    "signing_algo": report.signing_algo,
+                }
     elif provider == "copilot":
         api_mode = _copilot_runtime_api_mode(model_cfg, getattr(entry, "runtime_api_key", ""))
         base_url = base_url or PROVIDER_REGISTRY["copilot"].inference_base_url
@@ -265,6 +268,7 @@ def _resolve_runtime_from_pool_entry(
         "source": getattr(entry, "source", "pool"),
         "credential_pool": pool,
         "requested_provider": requested_provider,
+        "e2ee": e2ee_config,
     }
 
 
