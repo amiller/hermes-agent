@@ -9,6 +9,7 @@ import secrets
 import socket
 import ssl
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -42,6 +43,11 @@ except ImportError:
 # Set HERMES_ATTESTATION_VERBOSE=1 to print verifier output to console.
 _VERBOSE = os.getenv("HERMES_ATTESTATION_VERBOSE", "") == "1"
 
+# contextlib.redirect_stdout swaps sys.stdout globally; NEAR AI verifier calls
+# that print must be serialized across threads so parallel probes don't leak
+# verifier output onto the user's terminal.
+_STDOUT_CAPTURE_LOCK = threading.Lock()
+
 
 @dataclass
 class AttestationReport:
@@ -62,6 +68,42 @@ _ATTESTATION_CACHE: Dict[tuple, tuple] = {}
 _DEFAULT_TTL_SECONDS = 3600
 _FAILURE_TTL_SECONDS = 60  # re-try failed attestations after 60s
 
+# Per-model cache: {(provider_id, model_id): report} — populated lazily as models are used
+_MODEL_ATTESTATION_CACHE: Dict[tuple, "AttestationReport"] = {}
+
+
+def get_model_attestation_status(provider_id: str, model_id: str) -> "Optional[AttestationReport]":
+    return _MODEL_ATTESTATION_CACHE.get((provider_id, model_id))
+
+
+def probe_models_for_provider(
+    provider_id: str,
+    api_key: str,
+    base_url: str,
+    models: "list[str]",
+    config: Optional[Dict[str, Any]] = None,
+    max_workers: int = 6,
+) -> "list[str]":
+    """Probe attestation for each model in parallel; return only models with valid reports."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    cfg = config or {}
+
+    def _probe(model_id: str) -> "tuple[str, bool]":
+        creds = {"api_key": api_key, "base_url": base_url, "model": model_id}
+        try:
+            report = verify_attestation(provider_id, creds, cfg)
+        except Exception as exc:
+            logger.debug("probe failed for %s/%s: %s", provider_id, model_id, exc)
+            return model_id, False
+        return model_id, report.valid
+
+    if not models:
+        return []
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(models))) as ex:
+        results = list(ex.map(_probe, models))
+    return [m for m, ok in results if ok]
+
 
 def _live_tls_fingerprint(base_url: str) -> Optional[str]:
     """SHA-256 of the live server's leaf certificate (DER)."""
@@ -81,12 +123,13 @@ def _live_tls_fingerprint(base_url: str) -> Optional[str]:
 def verify_attestation(provider_id: str, runtime_creds: Dict[str, Any], config: Dict[str, Any]) -> AttestationReport:
     """Verify TEE attestation for a provider, with cache.
 
-    Cache is keyed on (provider_id, base_url) and pinned to the live TLS cert
+    Cache is keyed on (provider_id, base_url, model) and pinned to the live TLS cert
     fingerprint. Successful reports are cached for HERMES_ATTESTATION_TTL seconds
     (default 3600). Failed reports are cached for 60s to avoid hammering the endpoint.
     """
     base_url = (runtime_creds.get("base_url") or "").rstrip("/")
-    cache_key = (provider_id, base_url)
+    model_id = runtime_creds.get("model", "") or ""
+    cache_key = (provider_id, base_url, model_id)
     ttl = int(os.getenv("HERMES_ATTESTATION_TTL", str(_DEFAULT_TTL_SECONDS)))
 
     cached = _ATTESTATION_CACHE.get(cache_key)
@@ -108,7 +151,7 @@ def verify_attestation(provider_id: str, runtime_creds: Dict[str, Any], config: 
         report = _verify_redpill_attestation(runtime_creds, config)
     elif provider_id == "near-ai":
         if not _VERIFIER_AVAILABLE:
-            return AttestationReport(
+            report = AttestationReport(
                 valid=False, provider=provider_id, attestation_type="none",
                 verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 details={}, error="Attestation verifier dependencies not available"
@@ -120,6 +163,9 @@ def verify_attestation(provider_id: str, runtime_creds: Dict[str, Any], config: 
 
     live_fpr_now = _live_tls_fingerprint(base_url) if report.valid else None
     _ATTESTATION_CACHE[cache_key] = (report, int(time.time() * 1000), live_fpr_now)
+
+    if model_id:
+        _MODEL_ATTESTATION_CACHE[(provider_id, model_id)] = report
 
     if _VERBOSE and report.verifier_output:
         print(report.verifier_output, end="")
@@ -166,7 +212,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
         return _fail("No gateway_attestation in response")
 
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf):
         gw_intel = asyncio.run(check_tdx_quote(gateway))
     verifier_out += buf.getvalue()
 
@@ -174,7 +220,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
         return _fail("Gateway TDX quote verification failed", {"intel_result": gw_intel})
 
     buf2 = io.StringIO()
-    with contextlib.redirect_stdout(buf2):
+    with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf2):
         gw_rd = check_report_data(gateway, nonce, gw_intel)
     verifier_out += buf2.getvalue()
 
@@ -189,7 +235,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
 
     domain = urlparse(base_url).netloc
     buf3 = io.StringIO()
-    with contextlib.redirect_stdout(buf3):
+    with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf3):
         try:
             asyncio.run(verify_domain_attestation(DomainAttestation(
                 domain=domain, sha256sum=gateway.get("tls_cert_fingerprint", ""),
@@ -215,7 +261,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
 
     for i, model_att in enumerate(model_atts):
         buf_m = io.StringIO()
-        with contextlib.redirect_stdout(buf_m):
+        with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf_m):
             m_intel = asyncio.run(check_tdx_quote(model_att))
         verifier_out += buf_m.getvalue()
 
@@ -223,7 +269,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             return _fail(f"Model attestation #{i+1} TDX quote verification failed")
 
         buf_m2 = io.StringIO()
-        with contextlib.redirect_stdout(buf_m2):
+        with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf_m2):
             m_rd = check_report_data(model_att, nonce, m_intel)
         verifier_out += buf_m2.getvalue()
 
@@ -235,10 +281,9 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
         if not model_att.get("nvidia_payload"):
             return _fail(f"Model attestation #{i+1} missing nvidia_payload — GPU attestation required")
         buf_m3 = io.StringIO()
-        with contextlib.redirect_stdout(buf_m3):
+        with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf_m3):
             gpu_result = check_gpu(model_att, nonce)
         verifier_out += buf_m3.getvalue()
-
         if gpu_result.get("verdict") not in ("PASS", True):
             return _fail(f"Model attestation #{i+1} GPU verification failed: {gpu_result.get('verdict')}")
         if not gpu_result.get("nonce_matches"):
@@ -331,6 +376,77 @@ def _phala_check_report_data(report_data_hex: str, signing_address: str, signing
         return False
 
 
+def _verify_redpill_chutes(report: Dict[str, Any], model: str, nonce: str) -> AttestationReport:
+    """Verify Chutes-routed redpill models (attestation_type="chutes")."""
+    now = lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    def _fail(err: str, details: Optional[Dict[str, Any]] = None) -> AttestationReport:
+        return AttestationReport(
+            valid=False, provider="redpill", attestation_type="chutes+tdx",
+            verified_at=now(), details=details or {}, error=err,
+        )
+
+    atts = report.get("all_attestations") or []
+    if not atts:
+        return _fail("Chutes response missing all_attestations")
+
+    verified_instances = []
+    for i, att in enumerate(atts):
+        quote_b64 = att.get("intel_quote") or ""
+        if not quote_b64:
+            return _fail(f"Chutes instance #{i+1} missing intel_quote")
+        e2e_pubkey = att.get("e2e_pubkey") or ""
+        inst_nonce = att.get("nonce") or nonce
+        if not e2e_pubkey:
+            return _fail(f"Chutes instance #{i+1} missing e2e_pubkey (anti-tamper binding requires it)")
+
+        # Phala TDX verifier accepts hex; Chutes sends base64. Decode and re-encode.
+        try:
+            quote_bytes = base64.b64decode(quote_b64)
+        except Exception as exc:
+            return _fail(f"Chutes instance #{i+1} intel_quote base64 decode failed: {exc}")
+        quote_hex = quote_bytes.hex()
+
+        tdx_resp = requests.post(_PHALA_TDX_VERIFIER, json={"hex": quote_hex}, timeout=30).json()
+        quote_body = (tdx_resp.get("quote") or {}).get("body", {})
+        if not (tdx_resp.get("quote") or {}).get("verified"):
+            msg = (tdx_resp.get("quote") or {}).get("message") or tdx_resp.get("message") or "unspecified"
+            return _fail(f"Chutes instance #{i+1} TDX quote verification failed: {msg}",
+                         {"tcb_svn": quote_body.get("tee_tcb_svn")})
+
+        # Debug mode = td_attributes bit 0; must be OFF
+        td_attr = quote_body.get("td_attributes", "") or quote_body.get("tdAttributes", "")
+        if td_attr:
+            try:
+                if int(td_attr, 16) & 1:
+                    return _fail(f"Chutes instance #{i+1} TDX running in Debug mode")
+            except ValueError:
+                pass
+
+        # Anti-tamper binding: SHA256(nonce || e2e_pubkey) == report_data[0:32]
+        report_data_hex = (quote_body.get("reportdata") or "").removeprefix("0x").lower()
+        expected = hashlib.sha256((inst_nonce + e2e_pubkey).encode()).hexdigest().lower()
+        if report_data_hex[:64] != expected:
+            return _fail(
+                f"Chutes instance #{i+1} anti-tamper binding failed: "
+                f"SHA256(nonce||e2e_pubkey) != report_data[0:32]",
+                {"expected": expected, "got": report_data_hex[:64]},
+            )
+
+        verified_instances.append({
+            "instance_id": att.get("instance_id"),
+            "status": quote_body.get("status") or (tdx_resp.get("quote") or {}).get("status"),
+        })
+
+    return AttestationReport(
+        valid=True, provider="redpill", attestation_type="chutes+tdx",
+        verified_at=now(),
+        details={"model": model, "instances": verified_instances, "instance_count": len(verified_instances)},
+        signing_public_key=None,
+        signing_algo="ecdsa",
+    )
+
+
 def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str, Any]) -> AttestationReport:
     """Verify Redpill/Phala TEE attestation: TDX quote + compose hash + NVIDIA GPU."""
     api_key = runtime_creds.get("api_key", "")
@@ -352,18 +468,32 @@ def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
         )
     nonce = secrets.token_hex(32)
     url = f"{api_base}/v1/attestation/report"
+    # Chutes-routed models can take 60s+ to return the attestation bundle
+    # (5 instances × per-instance TDX quote).
     response = requests.get(url, params={"model": model, "nonce": nonce},
-                            headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
+                            headers={"Authorization": f"Bearer {api_key}"}, timeout=90)
     response.raise_for_status()
     report = response.json()
 
-    gateway_att = report.get("gateway_attestation", {})
-    model_atts = report.get("model_attestations", [])
-    if not gateway_att:
+    # Redpill returns four formats, matching the four backends in the verifier docs:
+    # - Phala simple: top-level intel_quote/nvidia_payload (phala/gpt-oss-20b, qwen-2.5-7b, ...)
+    # - NEAR AI:      gateway_attestation + model_attestations (phala/gpt-oss-120b, deepseek-chat-v3.1, ...)
+    # - Chutes:       attestation_type="chutes" + all_attestations[] with e2e_pubkey binding
+    # - Tinfoil:      hw policy + sigstore golden values (not yet routed through our curated list)
+    if report.get("attestation_type") == "chutes":
+        return _verify_redpill_chutes(report, model, nonce)
+    if "gateway_attestation" in report:
+        gateway_att = report["gateway_attestation"]
+        model_atts = report.get("model_attestations", [])
+    elif "intel_quote" in report:
+        gateway_att = report
+        model_atts = []
+    else:
         return AttestationReport(
             valid=False, provider="redpill", attestation_type="tdx+gpu",
             verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            details={"report": report}, error="No gateway_attestation in response"
+            details={"shape_keys": sorted(list(report.keys()))[:10]},
+            error="Unrecognized attestation response format",
         )
 
     # 1. TDX quote via Phala's verifier
@@ -426,7 +556,12 @@ def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
                     details={"gpu_verdict": gpu_verdict}, error=f"NVIDIA GPU attestation failed: {gpu_verdict}"
                 )
 
-    model_signing_key = model_atts[0].get("signing_public_key") if model_atts else None
+    # For E2EE: use model attestation's key/algo when present; fall back to gateway's
+    if model_atts and model_atts[0].get("signing_public_key"):
+        model_signing_key = model_atts[0]["signing_public_key"]
+        signing_algo = model_atts[0].get("signing_algo", signing_algo)
+    else:
+        model_signing_key = gateway_att.get("signing_public_key")
     return AttestationReport(
         valid=True, provider="redpill", attestation_type="tdx+gpu",
         verified_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
