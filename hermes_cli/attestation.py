@@ -49,6 +49,24 @@ _VERBOSE = os.getenv("HERMES_ATTESTATION_VERBOSE", "") == "1"
 _STDOUT_CAPTURE_LOCK = threading.Lock()
 
 
+def _sync_run(coro):
+    """Run an async coroutine synchronously. Safe inside a running event loop
+    (e.g. Hermes CLI) by offloading to a worker thread with its own loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    from concurrent.futures import ThreadPoolExecutor
+    def _worker():
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(_worker).result()
+
+
 @dataclass
 class AttestationReport:
     """TEE attestation verification result."""
@@ -213,7 +231,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
 
     buf = io.StringIO()
     with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf):
-        gw_intel = asyncio.run(check_tdx_quote(gateway))
+        gw_intel = _sync_run(check_tdx_quote(gateway))
     verifier_out += buf.getvalue()
 
     if not gw_intel or not gw_intel.get("verified", False):
@@ -237,7 +255,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
     buf3 = io.StringIO()
     with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf3):
         try:
-            asyncio.run(verify_domain_attestation(DomainAttestation(
+            _sync_run(verify_domain_attestation(DomainAttestation(
                 domain=domain, sha256sum=gateway.get("tls_cert_fingerprint", ""),
                 acme_account=gateway.get("acme_account", ""), cert=tls_certificate,
                 intel_quote=gateway.get("intel_quote", ""), info=gateway
@@ -262,7 +280,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
     for i, model_att in enumerate(model_atts):
         buf_m = io.StringIO()
         with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf_m):
-            m_intel = asyncio.run(check_tdx_quote(model_att))
+            m_intel = _sync_run(check_tdx_quote(model_att))
         verifier_out += buf_m.getvalue()
 
         if not m_intel or not m_intel.get("verified", False):
