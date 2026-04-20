@@ -1,8 +1,7 @@
 """httpx transport that E2EE-encrypts chat requests in-process.
 
-Drop-in replacement for the local HTTP proxy in `e2ee_proxy.py`. Attach via
-`openai.OpenAI(http_client=httpx.Client(transport=E2EETransport(...)))`.
-No extra socket, thread, or SSE framing hacks.
+Attach via `openai.OpenAI(http_client=httpx.Client(transport=E2EETransport(...)))`.
+Crypto primitives live in `hermes_cli.e2ee_proxy`.
 """
 import json
 import logging
