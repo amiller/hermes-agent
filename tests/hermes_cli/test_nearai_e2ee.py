@@ -113,7 +113,7 @@ class TestEd25519Roundtrip:
 class TestSigningKeyDerivation:
     def test_pub_key_derives_to_correct_address(self):
         """keccak256(pubkey[1:]) → last 20 bytes == Ethereum address."""
-        from eth_keys.datatypes import PublicKey as _EthPubKey
+        _EthPubKey = pytest.importorskip("eth_keys.datatypes").PublicKey
 
         priv = ec.generate_private_key(ec.SECP256K1(), default_backend())
         pub_bytes_full = priv.public_key().public_bytes(
@@ -126,7 +126,7 @@ class TestSigningKeyDerivation:
         assert len(eth_addr) == 42
 
     def test_wrong_pub_key_gives_different_address(self):
-        from eth_keys.datatypes import PublicKey as _EthPubKey
+        _EthPubKey = pytest.importorskip("eth_keys.datatypes").PublicKey
 
         priv1 = ec.generate_private_key(ec.SECP256K1(), default_backend())
         priv2 = ec.generate_private_key(ec.SECP256K1(), default_backend())
