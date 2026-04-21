@@ -1,0 +1,60 @@
+name: TEE Attestation Report
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 13 * * *'   # daily rolling evidence
+  push:
+    branches:
+      - feat/near-ai-attestation
+      - feat/e2ee-transport
+    paths:
+      - 'hermes_cli/attestation.py'
+      - 'hermes_cli/e2ee_transport.py'
+      - 'hermes_cli/e2ee_proxy.py'
+      - 'scripts/attestation_report.py'
+      - '.github/workflows/tee-attestation-report.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tee-attestation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv --python 3.11
+          source .venv/bin/activate
+          uv pip install -e ".[all]"
+
+      - name: Run attestation report
+        env:
+          NEAR_API_KEY: ${{ secrets.NEAR_API_KEY }}
+          REDPILL_API_KEY: ${{ secrets.REDPILL_API_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: |
+          source .venv/bin/activate
+          python scripts/attestation_report.py
+
+      - name: Upload JSON artifact
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4
+        with:
+          name: attestation-report-${{ github.run_id }}
+          path: attestation-report.json
+          retention-days: 30
