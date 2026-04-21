@@ -47,6 +47,11 @@ jobs:
       - name: Clone NEAR AI cloud verifier
         run: git clone --depth 1 https://github.com/nearai/nearai-cloud-verifier.git _nearai-verifier
 
+      - name: Install NEAR AI verifier deps
+        run: |
+          source .venv/bin/activate
+          uv pip install -r _nearai-verifier/requirements.txt
+
       - name: Run attestation report
         env:
           NEAR_API_KEY: ${{ secrets.NEAR_API_KEY }}
