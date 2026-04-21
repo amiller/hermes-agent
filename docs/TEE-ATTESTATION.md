@@ -33,37 +33,43 @@ In short: the cryptographic layer on this page is working exactly as designed; i
 
 ---
 
-_Run [`24701236795`](https://github.com/amiller/hermes-agent/actions/runs/24701236795) · commit [`f1f52f84`](https://github.com/amiller/hermes-agent/commit/f1f52f84cae0ffc298f5a68e8574ed42addccb0c) · 2026-04-21 02:45 UTC_
+_Run [`24740778021`](https://github.com/amiller/hermes-agent/actions/runs/24740778021) · commit [`87d28606`](https://github.com/amiller/hermes-agent/commit/87d28606ea3f8ba54327288888b3bf62d512edf8) · 2026-04-21 18:59 UTC_
 
-## near-ai: 3 / 6 pass
+## near-ai: 4 / 6 pass
 
 | Model | Verdict | Shape | Signing address | TCB | GPU | Latency |
 |-------|:-------:|-------|-----------------|-----|-----|--------:|
-| `openai/gpt-oss-120b` | ✅ | `tdx+gpu` | `0x56d070df…` | Unknown | 🟢 | 4.48s |
-| `zai-org/GLM-5.1-FP8` | ✅ | `tdx+gpu` | `0xbb4d2e7f…` | Unknown | 🟢 | 4.34s |
-| `zai-org/GLM-5-FP8` | ✅ | `tdx+gpu` | `0xa774243d…` | Unknown | 🟢 | 3.82s |
-| `Qwen/Qwen3-30B-A3B-Instruct-2507` | ❌ | `tdx` | — | — | — | 3.18s |
-| `deepseek-ai/DeepSeek-V3-0324` | ❌ | `—` | — | — | — | 0.26s |
-| `meta-llama/Llama-4-Scout-17B-16E-Instruct` | ❌ | `—` | — | — | — | 0.25s |
+| `openai/gpt-oss-120b` | ✅ | `tdx+gpu` | `0x56d070df…` | Unknown | 🟢 | 4.15s |
+| `zai-org/GLM-5.1-FP8` | ✅ | `tdx+gpu` | `0xbb4d2e7f…` | Unknown | 🟢 | 3.83s |
+| `zai-org/GLM-5-FP8` | ✅ | `tdx+gpu` | `0xa774243d…` | Unknown | 🟢 | 3.1s |
+| `Qwen/Qwen3-30B-A3B-Instruct-2507` | ✅ | `tdx+gpu` | `0xc03b0cfc…` | Unknown | 🟢 | 3.01s |
+| `deepseek-ai/DeepSeek-V3-0324` | ❌ | `—` | — | — | — | 0.08s |
+| `meta-llama/Llama-4-Scout-17B-16E-Instruct` | ❌ | `—` | — | — | — | 0.33s |
 
-<details><summary>3 failure(s) — expand</summary>
+<details><summary>2 failure(s) — expand</summary>
 
-- **`Qwen/Qwen3-30B-A3B-Instruct-2507`** — `Model attestation #1 GPU verification failed: False`
-- **`deepseek-ai/DeepSeek-V3-0324`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=deepseek-ai%2FDeepSeek-V3-0324&nonce=c121df035504e06845ebbdab51d024f1d8c4b139798daae1877ff7692c3ec5e9&signing_algo=ecdsa&include_tls_fingerprint=true`
-- **`meta-llama/Llama-4-Scout-17B-16E-Instruct`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=meta-llama%2FLlama-4-Scout-17B-16E-Instruct&nonce=1cb541ea346d5ecd6a75e225370670693490d0caa2ace6c51b0170c14d80eb9b&signing_algo=ecdsa&include_tls_fingerprint=true`
+- **`deepseek-ai/DeepSeek-V3-0324`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=deepseek-ai%2FDeepSeek-V3-0324&nonce=a4f102273db265e2fce96ed6346c7a6b775645f8c78ba21159451f95ec4703d4&signing_algo=ecdsa&include_tls_fingerprint=true`
+- **`meta-llama/Llama-4-Scout-17B-16E-Instruct`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=meta-llama%2FLlama-4-Scout-17B-16E-Instruct&nonce=56c31dbaea92ef196f8f22be917c68649913deda885864a5d08718a561e3bf3e&signing_algo=ecdsa&include_tls_fingerprint=true`
 
 </details>
 
-## redpill: 6 / 6 pass
+## redpill: 4 / 6 pass
 
 | Model | Verdict | Shape | Signing address | TCB | GPU | Latency |
 |-------|:-------:|-------|-----------------|-----|-----|--------:|
-| `phala/gpt-oss-20b` | ✅ | `tdx+gpu` | `0x3B65B57A…` | — | 🟢 | 2.63s |
-| `phala/gpt-oss-120b` | ✅ | `tdx+gpu` | `cb6fc58f6b…` | — | 🟢 | 2.79s |
-| `phala/qwen-2.5-7b-instruct` | ✅ | `tdx+gpu` | `0xc4045be3…` | — | 🟢 | 2.0s |
-| `phala/glm-4.7` | ✅ | `tdx+gpu` | `cb6fc58f6b…` | — | 🟢 | 2.71s |
-| `phala/deepseek-v3.2` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 32.05s |
-| `phala/kimi-k2.5` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 84.59s |
+| `phala/gpt-oss-20b` | ✅ | `tdx+gpu` | `0x3B65B57A…` | — | 🟢 | 2.52s |
+| `phala/gpt-oss-120b` | ❌ | `tdx+gpu` | — | — | — | 2.75s |
+| `phala/qwen-2.5-7b-instruct` | ✅ | `tdx+gpu` | `0xc4045be3…` | — | 🟢 | 2.2s |
+| `phala/glm-4.7` | ❌ | `tdx+gpu` | — | — | — | 2.41s |
+| `phala/deepseek-v3.2` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 21.55s |
+| `phala/kimi-k2.5` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 85.7s |
+
+<details><summary>2 failure(s) — expand</summary>
+
+- **`phala/gpt-oss-120b`** — `TDX quote verification failed: ppid=ca98bce2d0f6c53afd2a37537fcc3c3a tcb_svn=0b010200000000000000000000000000`
+- **`phala/glm-4.7`** — `TDX quote verification failed: ppid=ca98bce2d0f6c53afd2a37537fcc3c3a tcb_svn=0b010200000000000000000000000000`
+
+</details>
 
 ## What's verified per row
 
