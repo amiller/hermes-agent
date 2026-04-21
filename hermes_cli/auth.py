@@ -338,6 +338,19 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
             "verifier": "phala",
         },
     ),
+    "venice": ProviderConfig(
+        id="venice",
+        name="Venice (TEE-attested)",
+        auth_type="api_key",
+        inference_base_url="https://api.venice.ai/api/v1",
+        api_key_env_vars=("VENICE_API_KEY",),
+        base_url_env_var="VENICE_BASE_URL",
+        attestation_config={
+            "type": "tdx+gpu",
+            "endpoint": "/tee/attestation",
+            "verifier": "phala",
+        },
+    ),
 }
 
 
@@ -363,6 +376,10 @@ def resolve_near_ai_runtime_credentials() -> Dict[str, Any]:
 
 def resolve_redpill_runtime_credentials() -> Dict[str, Any]:
     return _resolve_api_key_provider("redpill")
+
+
+def resolve_venice_runtime_credentials() -> Dict[str, Any]:
+    return _resolve_api_key_provider("venice")
 
 
 # =============================================================================

@@ -6,17 +6,17 @@ author: amiller (Hermes Agent)
 license: MIT
 metadata:
   hermes:
-    tags: [attestation, tdx, gpu, nras, phala, redpill, near-ai, e2ee]
+    tags: [attestation, tdx, gpu, nras, phala, redpill, near-ai, venice, e2ee]
     related_skills: []
 ---
 
 # Overview
 
-Hermes supports two TEE-attested inference providers: `near-ai` and `redpill`.
-Both verify **Intel TDX** (CPU confidentiality) plus **NVIDIA GPU attestation
-via NRAS** (not SGX). Verification happens per-model at first use and is cached
-in-process. This skill lets you answer "is attestation working for this model
-right now?" from the live cache, rather than guessing.
+Hermes supports three TEE-attested inference providers: `near-ai`, `redpill`,
+and `venice`. All verify **Intel TDX** (CPU confidentiality) plus **NVIDIA GPU
+attestation via NRAS** (not SGX). Verification happens per-model at first use
+and is cached in-process. This skill lets you answer "is attestation working
+for this model right now?" from the live cache, rather than guessing.
 
 Ground-truth verifier: `hermes_cli/attestation.py` (import as `hermes_cli.attestation`).
 
@@ -43,6 +43,14 @@ Four backends, four shapes:
 | Tinfoil hw-policy (not yet exercised)     | not implemented            | —                                        |
 
 Chutes has an extra anti-tamper check: `SHA256(nonce ‖ e2e_pubkey) == report_data[0:32]`.
+
+For **venice** (`_verify_venice_attestation`): undocumented
+`GET {base_url}/tee/attestation?model=...&nonce=...` returns a Phala-shape
+bundle (`intel_quote` hex, `nvidia_payload`, `signing_address`,
+`signing_public_key`, `nonce_source`). We re-verify TDX via Phala's public
+verifier and GPU via NRAS rather than trusting Venice's own
+`server_verification` self-report. `nonce_source == "client"` is treated as
+the nonce-binding signal.
 
 Phala TDX verifier endpoint (used by both paths):
 `POST https://cloud-api.phala.network/api/v1/attestations/verify` body `{"hex": <quote_hex>}`.

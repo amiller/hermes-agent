@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from hermes_cli.e2ee_proxy import _decrypt_ecdsa, _generate_ecdsa_keypair
-from hermes_cli.e2ee_transport import E2EETransport
+from hermes_cli.e2ee_transport import E2EETransport, VeniceE2EETransport
 
 
 def _make_model_keypair():
@@ -140,3 +140,108 @@ class TestE2EETransportStreaming:
 
         assert upstream.received_plaintexts == ["stream pls"]
         assert "".join(collected) == "streaming-answer"
+
+
+class _FakeVeniceUpstream(httpx.BaseTransport):
+    """Venice-style upstream: asserts X-Venice-TEE-* headers, mixes plaintext/encrypted chunks."""
+    def __init__(self, model_priv, stream_chunks: list, non_stream_fields: dict | None = None):
+        self.model_priv = model_priv
+        self.stream_chunks = stream_chunks  # list of (is_encrypted, text) tuples
+        self.non_stream_fields = non_stream_fields
+        self.received_plaintexts: list[str] = []
+        self.last_headers: httpx.Headers | None = None
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.last_headers = request.headers
+        body = json.loads(request.content)
+        for msg in body.get("messages", []):
+            ct = msg.get("content", "")
+            if ct:
+                pt = _decrypt_ecdsa(bytes.fromhex(ct), self.model_priv)
+                self.received_plaintexts.append(pt.decode())
+
+        client_pub_hex = request.headers.get("x-venice-tee-client-pub-key", "")
+        assert client_pub_hex.startswith("04"), f"expected 04-prefixed client key, got {client_pub_hex[:4]}"
+
+        if self.non_stream_fields is not None:
+            result = {}
+            for k, v in self.non_stream_fields.items():
+                if k == "__encrypt__":
+                    for field, text in v.items():
+                        result[field] = _ecies_encrypt_to_client(text.encode(), client_pub_hex).hex()
+                else:
+                    result[k] = v
+            resp_body = json.dumps({"choices": [{"message": result}]}).encode()
+            return httpx.Response(200, headers={"content-type": "application/json"},
+                                  content=resp_body, request=request)
+
+        sse_lines = []
+        for is_encrypted, text in self.stream_chunks:
+            content = _ecies_encrypt_to_client(text.encode(), client_pub_hex).hex() if is_encrypted else text
+            sse_lines.append("data: " + json.dumps({"choices": [{"delta": {"content": content}}]}))
+        sse_lines.append("data: [DONE]")
+        sse_lines.append("")
+        body_bytes = ("\n".join(sse_lines) + "\n").encode()
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              content=body_bytes, request=request)
+
+
+class TestVeniceE2EETransport:
+    def test_uses_venice_header_names_with_04_prefix(self):
+        model_priv, model_pub_hex = _make_model_keypair()
+        upstream = _FakeVeniceUpstream(model_priv, stream_chunks=[(True, "hello")])
+        transport = VeniceE2EETransport(model_pub_hex, "ecdsa", inner=upstream)
+
+        with httpx.Client(transport=transport, base_url="https://api.venice.ai") as client:
+            client.post("/api/v1/chat/completions",
+                        json={"messages": [{"role": "user", "content": "hi"}]})
+
+        h = upstream.last_headers
+        assert h["x-venice-tee-signing-algo"] == "ecdsa"
+        assert h["x-venice-tee-client-pub-key"].startswith("04")
+        assert len(h["x-venice-tee-client-pub-key"]) == 130  # 04 + 64 bytes hex
+        assert h["x-venice-tee-model-pub-key"] == "04" + model_pub_hex
+        # Must NOT use hermes's default header names
+        assert "x-signing-algo" not in h
+        assert "x-client-pub-key" not in h
+
+    def test_streaming_mixed_plaintext_and_encrypted_chunks(self):
+        """Venice emits a mix of plaintext (e.g. status markers) and hex-encrypted content."""
+        model_priv, model_pub_hex = _make_model_keypair()
+        # First a short plaintext chunk (<186 chars, non-hex), then encrypted content
+        chunks = [(False, "[status: streaming]"), (True, "the answer is 42"), (True, " really")]
+        upstream = _FakeVeniceUpstream(model_priv, stream_chunks=chunks)
+        transport = VeniceE2EETransport(model_pub_hex, "ecdsa", inner=upstream)
+
+        collected = []
+        with httpx.Client(transport=transport, base_url="https://api.venice.ai") as client:
+            with client.stream(
+                "POST", "/api/v1/chat/completions",
+                json={"messages": [{"role": "user", "content": "q"}], "stream": True},
+            ) as resp:
+                for line in resp.iter_lines():
+                    if line.startswith("data: {"):
+                        delta = json.loads(line[6:])["choices"][0]["delta"]
+                        collected.append(delta.get("content", ""))
+
+        assert collected == ["[status: streaming]", "the answer is 42", " really"]
+
+    def test_non_streaming_decrypts_encrypted_fields_only(self):
+        """Non-streaming: encrypt content but pass through e.g. role plaintext unchanged."""
+        model_priv, model_pub_hex = _make_model_keypair()
+        upstream = _FakeVeniceUpstream(
+            model_priv,
+            stream_chunks=[],
+            non_stream_fields={"role": "assistant", "__encrypt__": {"content": "secret answer"}},
+        )
+        transport = VeniceE2EETransport(model_pub_hex, "ecdsa", inner=upstream)
+
+        with httpx.Client(transport=transport, base_url="https://api.venice.ai") as client:
+            resp = client.post(
+                "/api/v1/chat/completions",
+                json={"messages": [{"role": "user", "content": "q"}], "stream": False},
+            )
+
+        msg = resp.json()["choices"][0]["message"]
+        assert msg["role"] == "assistant"
+        assert msg["content"] == "secret answer"
