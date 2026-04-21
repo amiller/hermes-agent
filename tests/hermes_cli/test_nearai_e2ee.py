@@ -483,3 +483,114 @@ class TestRedpillShapeDispatch:
         )
         assert r.valid is False
         assert "Unrecognized attestation response format" in (r.error or "")
+
+
+# ---------------------------------------------------------------------------
+# Venice attestation — Phala-shape TDX + optional NVIDIA GPU, all re-verified.
+# ---------------------------------------------------------------------------
+
+class TestVeniceAttestation:
+    def setup_method(self):
+        from hermes_cli.attestation import _MODEL_ATTESTATION_CACHE, _ATTESTATION_CACHE
+        _MODEL_ATTESTATION_CACHE.clear()
+        _ATTESTATION_CACHE.clear()
+
+    def teardown_method(self):
+        from hermes_cli.attestation import _MODEL_ATTESTATION_CACHE, _ATTESTATION_CACHE
+        _MODEL_ATTESTATION_CACHE.clear()
+        _ATTESTATION_CACHE.clear()
+
+    def _fake_get(self, body, status_code=200):
+        class _Resp:
+            def __init__(self):
+                self.status_code = status_code
+            def json(self_inner):
+                return body
+            def raise_for_status(self_inner):
+                if status_code >= 400:
+                    raise requests.HTTPError(f"HTTP {status_code}")
+        return _Resp()
+
+    def test_missing_api_key(self):
+        from hermes_cli import attestation as att_mod
+        r = att_mod._verify_venice_attestation({"model": "e2ee-glm-5"}, {})
+        assert r.valid is False
+        assert "API key" in (r.error or "")
+
+    def test_missing_model(self):
+        from hermes_cli import attestation as att_mod
+        r = att_mod._verify_venice_attestation({"api_key": "k"}, {})
+        assert r.valid is False
+        assert "model" in (r.error or "").lower()
+
+    def test_404_returns_no_tee(self, monkeypatch):
+        from hermes_cli import attestation as att_mod
+        monkeypatch.setattr(att_mod.requests, "get", lambda *a, **kw: self._fake_get({}, status_code=404))
+        r = att_mod._verify_venice_attestation(
+            {"api_key": "k", "model": "no-tee-model"}, {},
+        )
+        assert r.valid is False
+        assert "404" in (r.error or "")
+
+    def test_tdx_failure_propagates(self, monkeypatch):
+        from hermes_cli import attestation as att_mod
+        att_body = {
+            "intel_quote": "deadbeef",
+            "signing_address": "0x" + "11" * 20,
+            "nonce_source": "client",
+        }
+        monkeypatch.setattr(att_mod.requests, "get", lambda *a, **kw: self._fake_get(att_body))
+
+        class _P:
+            def json(self_inner):
+                return {"quote": {"verified": False, "message": "stubbed"}}
+        monkeypatch.setattr(att_mod.requests, "post", lambda *a, **kw: _P())
+
+        r = att_mod._verify_venice_attestation(
+            {"api_key": "k", "model": "e2ee-glm-5"}, {},
+        )
+        assert r.valid is False
+        assert "TDX quote verification failed" in (r.error or "")
+
+    def test_report_data_binding_enforced(self, monkeypatch):
+        from hermes_cli import attestation as att_mod
+        # Verifier returns verified=True but with zero report_data — binding must fail.
+        test_nonce = "55" * 32
+        monkeypatch.setattr(att_mod.secrets, "token_hex", lambda n: test_nonce)
+        att_body = {
+            "intel_quote": "deadbeef",
+            "signing_address": "0x" + "22" * 20,
+            "nonce_source": "client",
+        }
+        monkeypatch.setattr(att_mod.requests, "get", lambda *a, **kw: self._fake_get(att_body))
+
+        class _P:
+            def json(self_inner):
+                return {"quote": {"verified": True, "body": {"reportdata": "00" * 64}}}
+        monkeypatch.setattr(att_mod.requests, "post", lambda *a, **kw: _P())
+
+        r = att_mod._verify_venice_attestation(
+            {"api_key": "k", "model": "e2ee-glm-5"}, {},
+        )
+        assert r.valid is False
+        assert "bind" in (r.error or "").lower()
+
+    def test_verify_attestation_dispatches_venice(self, monkeypatch):
+        # Smoke-test the top-level dispatcher routes venice to the venice handler.
+        from hermes_cli import attestation as att_mod
+        called = []
+        def fake(creds, config):
+            called.append(creds.get("model"))
+            return att_mod.AttestationReport(
+                valid=True, provider="venice", attestation_type="tdx+gpu",
+                verified_at="", details={}, signing_public_key="beef", signing_algo="ecdsa",
+            )
+        monkeypatch.setattr(att_mod, "_verify_venice_attestation", fake)
+        monkeypatch.setattr(att_mod, "_live_tls_fingerprint", lambda *a, **kw: None)
+        r = att_mod.verify_attestation(
+            "venice",
+            {"api_key": "k", "base_url": "https://api.venice.ai/api/v1", "model": "e2ee-glm-5"},
+            {},
+        )
+        assert r.valid is True and r.provider == "venice"
+        assert called == ["e2ee-glm-5"]

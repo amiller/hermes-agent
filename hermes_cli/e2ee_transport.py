@@ -15,6 +15,24 @@ logger = logging.getLogger(__name__)
 
 _DECRYPT_FIELDS = ("content", "reasoning_content", "reasoning")
 
+# Minimum valid envelope hex length: eph_pub(65) + nonce(12) + tag(16) = 93 bytes = 186 hex
+_MIN_ENVELOPE_HEX = 186
+_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+
+
+def _looks_like_envelope_hex(s: str) -> bool:
+    if len(s) < _MIN_ENVELOPE_HEX:
+        return False
+    return all(c in _HEX_CHARS for c in s)
+
+
+def _with_04_prefix(pub_hex: str) -> str:
+    if pub_hex.startswith("04") and len(pub_hex) == 130:
+        return pub_hex
+    if len(pub_hex) == 128:
+        return "04" + pub_hex
+    return pub_hex
+
 
 class _ChainedByteStream(httpx.SyncByteStream):
     """Wrap a decrypting generator; close the upstream response when done."""
@@ -33,6 +51,13 @@ class _ChainedByteStream(httpx.SyncByteStream):
 
 
 class E2EETransport(httpx.BaseTransport):
+    # Default header layout (near-ai, redpill).  Venice overrides via subclass.
+    _HDR_ALGO = "X-Signing-Algo"
+    _HDR_CLIENT_PUB = "X-Client-Pub-Key"
+    _HDR_MODEL_PUB = "X-Model-Pub-Key"
+    _PREFIX_04 = False
+    _CONDITIONAL_DECRYPT = False  # when True, only decrypt fields that look like hex envelopes
+
     def __init__(
         self,
         signing_public_key: str,
@@ -48,6 +73,16 @@ class E2EETransport(httpx.BaseTransport):
             return self._handle_chat(request)
         return self._inner.handle_request(request)
 
+    def _should_decrypt(self, val) -> bool:
+        if not isinstance(val, str) or not val:
+            return False
+        if self._CONDITIONAL_DECRYPT:
+            return _looks_like_envelope_hex(val)
+        return True
+
+    def _format_pub(self, pub_hex: str) -> str:
+        return _with_04_prefix(pub_hex) if self._PREFIX_04 else pub_hex
+
     def _handle_chat(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content or b"{}")
         priv_key, client_pub_hex = _generate_keypair(self._algo)
@@ -58,9 +93,9 @@ class E2EETransport(httpx.BaseTransport):
 
         new_body = json.dumps(payload).encode()
         headers = httpx.Headers(request.headers)
-        headers["X-Signing-Algo"] = self._algo
-        headers["X-Client-Pub-Key"] = client_pub_hex
-        headers["X-Model-Pub-Key"] = self._pub
+        headers[self._HDR_ALGO] = self._algo
+        headers[self._HDR_CLIENT_PUB] = self._format_pub(client_pub_hex)
+        headers[self._HDR_MODEL_PUB] = self._format_pub(self._pub)
         headers["Content-Length"] = str(len(new_body))
 
         upstream_req = httpx.Request(
@@ -77,9 +112,14 @@ class E2EETransport(httpx.BaseTransport):
             decrypt_stream = _ChainedByteStream(
                 self._decrypt_sse(upstream.iter_bytes(), priv_key), upstream,
             )
+            # iter_bytes() already decompresses via content-encoding; drop the
+            # header so the downstream client doesn't try to decode again.
+            stream_headers = httpx.Headers(upstream.headers)
+            stream_headers.pop("content-encoding", None)
+            stream_headers.pop("content-length", None)
             return httpx.Response(
                 status_code=upstream.status_code,
-                headers=upstream.headers,
+                headers=stream_headers,
                 stream=decrypt_stream,
                 extensions=upstream.extensions,
                 request=request,
@@ -100,10 +140,11 @@ class E2EETransport(httpx.BaseTransport):
         for choice in data.get("choices", []):
             msg = choice.get("message", {})
             for field in _DECRYPT_FIELDS:
-                if msg.get(field):
+                if self._should_decrypt(msg.get(field)):
                     msg[field] = _decrypt_content(msg[field], priv_key, self._algo)
         out = json.dumps(data).encode()
         new_headers = httpx.Headers(upstream.headers)
+        new_headers.pop("content-encoding", None)
         new_headers["Content-Length"] = str(len(out))
         return httpx.Response(
             status_code=upstream.status_code,
@@ -129,9 +170,18 @@ class E2EETransport(httpx.BaseTransport):
                     for choice in data.get("choices", []):
                         delta = choice.get("delta", {})
                         for field in _DECRYPT_FIELDS:
-                            if delta.get(field):
+                            if self._should_decrypt(delta.get(field)):
                                 delta[field] = _decrypt_content(delta[field], priv_key, self._algo)
                     line = "data: " + json.dumps(data)
                 yield (line + "\n").encode()
         if pending:
             yield pending
+
+
+class VeniceE2EETransport(E2EETransport):
+    """Venice AI variant: distinct headers, 04-prefixed keys, mixed plaintext/encrypted stream."""
+    _HDR_ALGO = "X-Venice-TEE-Signing-Algo"
+    _HDR_CLIENT_PUB = "X-Venice-TEE-Client-Pub-Key"
+    _HDR_MODEL_PUB = "X-Venice-TEE-Model-Pub-Key"
+    _PREFIX_04 = True
+    _CONDITIONAL_DECRYPT = True
