@@ -128,6 +128,25 @@ Modern agents leak their full context — memory, credentials, intermediate reas
 
 If a row below is ❌, the CLI refuses to send plaintext to that model and the `/model` picker hides it. No fallbacks.
 
+## Known gaps (as of this writing)
+
+This is an early-deployment dev-proof chain. A ✅ row means the five checks below passed *for that model, at this run's timestamp* — it is **not** a claim that the stack is finished. Issues we are tracking:
+
+**Prover side (upstream providers):**
+- `Qwen/Qwen3-30B-A3B-Instruct-2507` (NEAR AI) — NRAS consistently returns `GPU verification failed: False` for the shared pool hosting this model. Needs escalation to the NEAR AI fleet operator; likely a GPU-driver / NRAS-policy mismatch, not a CLI bug.
+- `phala/gpt-oss-120b` (RedPill) — TDX quote rejected with stale PPID / `tcb_svn=0b01020000…`. The host's Intel provisioning cert needs a refresh on that box.
+- Intermittent `503`s on NEAR AI (seen on `DeepSeek-V3-0324`, `Llama-4-Scout-17B-…`) — the model's CVM isn't always warm, so there is no bundle to verify. Availability, not correctness.
+
+**Attestation shape (currently rendered as ✅ but weaker):**
+- Rows whose `Shape` column says `chutes+tdx` (e.g. `phala/deepseek-v3.2`, `phala/kimi-k2.5`) attest the **relay CVM**, not the GPU executing the model — there is no `tdx+gpu` bundle for these models yet. The CLI trusts the relay, which is a step down from the other RedPill rows.
+
+**Verifier side (this repo):**
+- TCB column shows `—` for most RedPill rows even when the quote is valid — we don't parse TCB status out of Phala's bundle shape yet.
+- For rows that fail early (e.g. TDX quote rejected) the `Signing address` and `GPU` columns are blank because the check short-circuited. That's intentional, but worth noting.
+- The `signing_public_key → signing_address` keccak derivation is currently the only binding between the attested key and the transport; if a provider changes bundle format, we fail closed rather than silently pass, but the behaviour is untested on live format drift.
+
+Everything above is the *current* delta between "we trust this enclave" and "we trust the end-to-end pipeline." The table updates as these close.
+
 ---
 
 """
