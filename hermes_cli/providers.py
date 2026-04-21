@@ -177,6 +177,13 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         base_url_env_var="REDPILL_BASE_URL",
         extra_env_vars=("REDPILL_API_KEY",),
     ),
+    "venice": HermesOverlay(
+        transport="openai_chat",
+        auth_type="api_key",
+        base_url_override="https://api.venice.ai/api/v1",
+        base_url_env_var="VENICE_BASE_URL",
+        extra_env_vars=("VENICE_API_KEY",),
+    ),
 }
 
 

@@ -167,6 +167,8 @@ def verify_attestation(provider_id: str, runtime_creds: Dict[str, Any], config: 
 
     if provider_id == "redpill":
         report = _verify_redpill_attestation(runtime_creds, config)
+    elif provider_id == "venice":
+        report = _verify_venice_attestation(runtime_creds, config)
     elif provider_id == "near-ai":
         if not _VERIFIER_AVAILABLE:
             report = AttestationReport(
@@ -592,6 +594,117 @@ def _verify_redpill_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             "instance_id": info.get("instance_id"),
         },
         signing_public_key=model_signing_key,
+        signing_algo=signing_algo,
+    )
+
+
+def _verify_venice_attestation(runtime_creds: Dict[str, Any], config: Dict[str, Any]) -> AttestationReport:
+    """Verify Venice AI TEE attestation.
+
+    Venice exposes an undocumented ``GET /tee/attestation?model=X&nonce=Y`` endpoint
+    (base = https://api.venice.ai/api/v1). Response is a Phala-shape bundle with
+    ``intel_quote`` (hex), optional ``nvidia_payload``, ``signing_address``,
+    ``signing_public_key``, and ``nonce_source``. We re-run TDX via Phala's public
+    verifier and NVIDIA NRAS ourselves rather than trusting Venice's own
+    ``server_verification`` block.
+    """
+    api_key = runtime_creds.get("api_key", "")
+    base_url = (runtime_creds.get("base_url") or "https://api.venice.ai/api/v1").rstrip("/")
+    model = runtime_creds.get("model", "")
+    now = lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    def _fail(err: str, details: Optional[Dict[str, Any]] = None) -> AttestationReport:
+        return AttestationReport(
+            valid=False, provider="venice", attestation_type="tdx+gpu",
+            verified_at=now(), details=details or {}, error=err,
+        )
+
+    if not api_key:
+        return _fail("No API key in runtime credentials")
+    if not model:
+        return _fail("No model in runtime credentials")
+
+    nonce = secrets.token_hex(32)
+    url = f"{base_url}/tee/attestation"
+    response = requests.get(
+        url, params={"model": model, "nonce": nonce},
+        headers={"Authorization": f"Bearer {api_key}"}, timeout=60,
+    )
+    if response.status_code == 404:
+        return _fail("no TEE attestation available for this model (404)")
+    response.raise_for_status()
+    att = response.json()
+
+    quote_hex = att.get("intel_quote") or att.get("quote") or ""
+    if isinstance(quote_hex, dict):
+        quote_hex = quote_hex.get("hex") or quote_hex.get("intel_quote") or ""
+    if not quote_hex:
+        return _fail("no TDX quote in response", {"keys": sorted(att.keys())[:20]})
+
+    nonce_bound = att.get("nonce_source") == "client"
+
+    tdx_resp = requests.post(_PHALA_TDX_VERIFIER, json={"hex": quote_hex}, timeout=30).json()
+    quote_body = (tdx_resp.get("quote") or {}).get("body", {})
+    if not (tdx_resp.get("quote") or {}).get("verified"):
+        msg = (tdx_resp.get("quote") or {}).get("message") or tdx_resp.get("message") or "unspecified"
+        return _fail(f"TDX quote verification failed: {msg}", {"tcb_svn": quote_body.get("tee_tcb_svn")})
+
+    signing_address = att.get("signing_address", "")
+    signing_public_key = att.get("signing_public_key", "")
+    signing_algo = att.get("signing_algo", "ecdsa")
+
+    report_data_hex = quote_body.get("reportdata", "")
+    if not _phala_check_report_data(report_data_hex, signing_address, signing_algo, nonce):
+        return _fail("TDX report_data does not bind signing_address + nonce")
+
+    if signing_public_key and signing_address:
+        from eth_keys.datatypes import PublicKey as _EthPubKey
+        pub_bytes = bytes.fromhex(signing_public_key)
+        if len(pub_bytes) == 65 and pub_bytes[0] == 0x04:
+            pub_bytes = pub_bytes[1:]
+        derived = "0x" + _EthPubKey(pub_bytes).to_canonical_address().hex()
+        if derived.lower() != signing_address.lower():
+            return _fail("signing_public_key does not derive to signing_address",
+                         {"derived": derived, "claimed": signing_address})
+
+    mr_config = quote_body.get("mrconfig", "")
+    tcb_info = att.get("tcb_info") or (att.get("info") or {}).get("tcb_info") or {}
+    if isinstance(tcb_info, str):
+        try:
+            tcb_info = _json.loads(tcb_info)
+        except Exception:
+            tcb_info = {}
+    app_compose = tcb_info.get("app_compose")
+    compose_hash_verified = False
+    if app_compose and mr_config:
+        compose_hash = hashlib.sha256(app_compose.encode()).hexdigest()
+        compose_hash_verified = mr_config.lower().startswith(("0x01" + compose_hash).lower())
+
+    gpu_verdict = None
+    nvidia_payload = att.get("nvidia_payload")
+    if nvidia_payload:
+        if isinstance(nvidia_payload, str):
+            nvidia_payload = _json.loads(nvidia_payload)
+        gpu_resp = requests.post(_NVIDIA_NRAS, json=nvidia_payload, timeout=30).json()
+        gpu_verdict = _decode_nvidia_verdict(gpu_resp[0][1])
+        gpu_passed = gpu_verdict is True or gpu_verdict == "PASS"
+        if not gpu_passed:
+            return _fail(f"NVIDIA GPU attestation failed: {gpu_verdict}",
+                         {"gpu_verdict": gpu_verdict})
+
+    return AttestationReport(
+        valid=True, provider="venice", attestation_type="tdx+gpu",
+        verified_at=now(),
+        details={
+            "signing_address": signing_address,
+            "model": model,
+            "nonce_bound": nonce_bound,
+            "compose_hash_verified": compose_hash_verified,
+            "gpu_verdict": gpu_verdict,
+            "tee_provider": att.get("tee_provider"),
+            "tee_hardware": att.get("tee_hardware"),
+        },
+        signing_public_key=signing_public_key or None,
         signing_algo=signing_algo,
     )
 
