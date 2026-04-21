@@ -44,11 +44,14 @@ jobs:
           # NEAR AI attestation verifier needs dcap-qvl (not in base deps)
           uv pip install dcap-qvl
 
+      - name: Clone NEAR AI cloud verifier
+        run: git clone --depth 1 https://github.com/nearai/nearai-cloud-verifier.git _nearai-verifier
+
       - name: Run attestation report
         env:
           NEAR_API_KEY: ${{ secrets.NEAR_API_KEY }}
           REDPILL_API_KEY: ${{ secrets.REDPILL_API_KEY }}
-          NEARAI_VERIFIER_PATH: ${{ github.workspace }}/examples/tee-providers/vendor/nearai-cloud-verifier/py
+          NEARAI_VERIFIER_PATH: ${{ github.workspace }}/_nearai-verifier/py
           PYTHONUNBUFFERED: '1'
         run: |
           source .venv/bin/activate
