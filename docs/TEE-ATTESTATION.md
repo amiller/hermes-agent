@@ -19,40 +19,40 @@ If a row below is ❌, the CLI refuses to send plaintext to that model and the `
 
 ---
 
-_Run `24698032254` · commit `178f44c5` · 2026-04-21 00:48 UTC_
+_Run `24700331394` · commit `2fcdc9f4` · 2026-04-21 02:10 UTC_
 
-## near-ai: 4 / 6 pass
+## near-ai: 3 / 6 pass
 
 | Model | Verdict | Shape | Signing address | TCB | GPU | Latency |
 |-------|:-------:|-------|-----------------|-----|-----|--------:|
-| `openai/gpt-oss-120b` | ✅ | `tdx+gpu` | `0x56d070df…` | Unknown | 🟢 | 2.81s |
-| `zai-org/GLM-5.1-FP8` | ✅ | `tdx+gpu` | `0xbb4d2e7f…` | Unknown | 🟢 | 2.35s |
-| `zai-org/GLM-5-FP8` | ✅ | `tdx+gpu` | `0xa774243d…` | Unknown | 🟢 | 3.46s |
-| `Qwen/Qwen3-30B-A3B-Instruct-2507` | ✅ | `tdx+gpu` | `0xc03b0cfc…` | Unknown | 🟢 | 2.68s |
-| `deepseek-ai/DeepSeek-V3-0324` | ❌ | `—` | — | — | — | 0.4s |
-| `meta-llama/Llama-4-Scout-17B-16E-Instruct` | ❌ | `—` | — | — | — | 0.04s |
+| `openai/gpt-oss-120b` | ✅ | `tdx+gpu` | `0x56d070df…` | Unknown | 🟢 | 3.4s |
+| `zai-org/GLM-5.1-FP8` | ✅ | `tdx+gpu` | `0xbb4d2e7f…` | Unknown | 🟢 | 3.05s |
+| `zai-org/GLM-5-FP8` | ✅ | `tdx+gpu` | `0xa774243d…` | Unknown | 🟢 | 2.65s |
+| `Qwen/Qwen3-30B-A3B-Instruct-2507` | ❌ | `tdx` | — | — | — | 2.38s |
+| `deepseek-ai/DeepSeek-V3-0324` | ❌ | `—` | — | — | — | 0.06s |
+| `meta-llama/Llama-4-Scout-17B-16E-Instruct` | ❌ | `—` | — | — | — | 0.06s |
 
-<details><summary>2 failure(s) — expand</summary>
+<details><summary>3 failure(s) — expand</summary>
 
-- **`deepseek-ai/DeepSeek-V3-0324`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=deepseek-ai%2FDeepSeek-V3-0324&nonce=a9380aea5a0599000685a88834c762e7eeeca5d58e1ebfcf94fa41f809e36595&signing_algo=ecdsa&include_tls_fingerprint=true`
-- **`meta-llama/Llama-4-Scout-17B-16E-Instruct`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=meta-llama%2FLlama-4-Scout-17B-16E-Instruct&nonce=bff2d785e018324c330a7c7e46d82f218d06f4047f4312b9c6f7a1cb72a4c7c1&signing_algo=ecdsa&include_tls_fingerprint=true`
+- **`Qwen/Qwen3-30B-A3B-Instruct-2507`** — `Model attestation #1 GPU verification failed: False`
+- **`deepseek-ai/DeepSeek-V3-0324`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=deepseek-ai%2FDeepSeek-V3-0324&nonce=b515faccf624164a6b8b0f0b0c6594e911e51541fdadf2ce8f1bfc03b4b94de0&signing_algo=ecdsa&include_tls_fingerprint=true`
+- **`meta-llama/Llama-4-Scout-17B-16E-Instruct`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=meta-llama%2FLlama-4-Scout-17B-16E-Instruct&nonce=0ce923e7ac0481f9ef52c06b0e658b16ba43d19a2b40803ea97e240841c0e4d3&signing_algo=ecdsa&include_tls_fingerprint=true`
 
 </details>
 
-## redpill: 4 / 6 pass
+## redpill: 5 / 6 pass
 
 | Model | Verdict | Shape | Signing address | TCB | GPU | Latency |
 |-------|:-------:|-------|-----------------|-----|-----|--------:|
-| `phala/gpt-oss-20b` | ✅ | `tdx+gpu` | `0x3B65B57A…` | — | 🟢 | 2.81s |
-| `phala/gpt-oss-120b` | ❌ | `tdx+gpu` | — | — | — | 2.8s |
-| `phala/qwen-2.5-7b-instruct` | ✅ | `tdx+gpu` | `0xc4045be3…` | — | 🟢 | 2.65s |
-| `phala/glm-4.7` | ❌ | `tdx+gpu` | — | — | — | 2.64s |
-| `phala/deepseek-v3.2` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 32.49s |
-| `phala/kimi-k2.5` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 84.68s |
+| `phala/gpt-oss-20b` | ✅ | `tdx+gpu` | `0x3B65B57A…` | — | 🟢 | 2.52s |
+| `phala/gpt-oss-120b` | ✅ | `tdx+gpu` | `cb6fc58f6b…` | — | 🟢 | 4.07s |
+| `phala/qwen-2.5-7b-instruct` | ✅ | `tdx+gpu` | `0xc4045be3…` | — | 🟢 | 2.71s |
+| `phala/glm-4.7` | ❌ | `tdx+gpu` | — | — | — | 3.54s |
+| `phala/deepseek-v3.2` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 29.32s |
+| `phala/kimi-k2.5` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 84.41s |
 
-<details><summary>2 failure(s) — expand</summary>
+<details><summary>1 failure(s) — expand</summary>
 
-- **`phala/gpt-oss-120b`** — `TDX quote verification failed: ppid=ca98bce2d0f6c53afd2a37537fcc3c3a tcb_svn=0b010200000000000000000000000000`
 - **`phala/glm-4.7`** — `TDX quote verification failed: ppid=ca98bce2d0f6c53afd2a37537fcc3c3a tcb_svn=0b010200000000000000000000000000`
 
 </details>
