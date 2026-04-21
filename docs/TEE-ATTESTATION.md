@@ -20,39 +20,64 @@ Modern agents leak their full context — memory, credentials, intermediate reas
 
 If a row below is ❌, the CLI refuses to send plaintext to that model and the `/model` picker hides it. No fallbacks.
 
+## Known gaps (as of this writing)
+
+This is an early-deployment dev-proof chain. A ✅ row means the five checks below passed *for that model, at this run's timestamp* — it is **not** a claim that the stack is finished. Issues we are tracking:
+
+**Prover side (upstream providers):**
+- `Qwen/Qwen3-30B-A3B-Instruct-2507` (NEAR AI) — NRAS consistently returns `GPU verification failed: False` for the shared pool hosting this model. Needs escalation to the NEAR AI fleet operator; likely a GPU-driver / NRAS-policy mismatch, not a CLI bug.
+- `phala/gpt-oss-120b` (RedPill) — TDX quote rejected with stale PPID / `tcb_svn=0b01020000…`. The host's Intel provisioning cert needs a refresh on that box.
+- Intermittent `503`s on NEAR AI (seen on `DeepSeek-V3-0324`, `Llama-4-Scout-17B-…`) — the model's CVM isn't always warm, so there is no bundle to verify. Availability, not correctness.
+
+**Attestation shape (currently rendered as ✅ but weaker):**
+- Rows whose `Shape` column says `chutes+tdx` (e.g. `phala/deepseek-v3.2`, `phala/kimi-k2.5`) attest the **relay CVM**, not the GPU executing the model — there is no `tdx+gpu` bundle for these models yet. The CLI trusts the relay, which is a step down from the other RedPill rows.
+
+**Verifier side (this repo):**
+- TCB column shows `—` for most RedPill rows even when the quote is valid — we don't parse TCB status out of Phala's bundle shape yet.
+- For rows that fail early (e.g. TDX quote rejected) the `Signing address` and `GPU` columns are blank because the check short-circuited. That's intentional, but worth noting.
+- The `signing_public_key → signing_address` keccak derivation is currently the only binding between the attested key and the transport; if a provider changes bundle format, we fail closed rather than silently pass, but the behaviour is untested on live format drift.
+
+Everything above is the *current* delta between "we trust this enclave" and "we trust the end-to-end pipeline." The table updates as these close.
+
 ---
 
-_Run [`24700812499`](https://github.com/amiller/hermes-agent/actions/runs/24700812499) · commit [`d79a88e9`](https://github.com/amiller/hermes-agent/commit/d79a88e97ec3e6a1c4bb0b62083171d3f39cd978) · 2026-04-21 02:28 UTC_
+_Run [`24701012408`](https://github.com/amiller/hermes-agent/actions/runs/24701012408) · commit [`beeac433`](https://github.com/amiller/hermes-agent/commit/beeac43352bfc9e5be945af5d2113c6278f43bec) · 2026-04-21 02:36 UTC_
 
 ## near-ai: 3 / 6 pass
 
 | Model | Verdict | Shape | Signing address | TCB | GPU | Latency |
 |-------|:-------:|-------|-----------------|-----|-----|--------:|
-| `openai/gpt-oss-120b` | ✅ | `tdx+gpu` | `0x56d070df…` | Unknown | 🟢 | 3.16s |
-| `zai-org/GLM-5.1-FP8` | ✅ | `tdx+gpu` | `0xbb4d2e7f…` | Unknown | 🟢 | 3.69s |
-| `zai-org/GLM-5-FP8` | ✅ | `tdx+gpu` | `0xa774243d…` | Unknown | 🟢 | 2.59s |
-| `Qwen/Qwen3-30B-A3B-Instruct-2507` | ❌ | `tdx` | — | — | — | 3.77s |
-| `deepseek-ai/DeepSeek-V3-0324` | ❌ | `—` | — | — | — | 0.41s |
-| `meta-llama/Llama-4-Scout-17B-16E-Instruct` | ❌ | `—` | — | — | — | 0.42s |
+| `openai/gpt-oss-120b` | ✅ | `tdx+gpu` | `0x56d070df…` | Unknown | 🟢 | 4.62s |
+| `zai-org/GLM-5.1-FP8` | ✅ | `tdx+gpu` | `0xbb4d2e7f…` | Unknown | 🟢 | 4.57s |
+| `zai-org/GLM-5-FP8` | ✅ | `tdx+gpu` | `0xa774243d…` | Unknown | 🟢 | 4.28s |
+| `Qwen/Qwen3-30B-A3B-Instruct-2507` | ❌ | `tdx` | — | — | — | 4.09s |
+| `deepseek-ai/DeepSeek-V3-0324` | ❌ | `—` | — | — | — | 0.24s |
+| `meta-llama/Llama-4-Scout-17B-16E-Instruct` | ❌ | `—` | — | — | — | 0.24s |
 
 <details><summary>3 failure(s) — expand</summary>
 
 - **`Qwen/Qwen3-30B-A3B-Instruct-2507`** — `Model attestation #1 GPU verification failed: False`
-- **`deepseek-ai/DeepSeek-V3-0324`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=deepseek-ai%2FDeepSeek-V3-0324&nonce=504de98e2f7e52532b23daae3fcc7aa385795d9d72e6c7ab23935b08fed4e827&signing_algo=ecdsa&include_tls_fingerprint=true`
-- **`meta-llama/Llama-4-Scout-17B-16E-Instruct`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=meta-llama%2FLlama-4-Scout-17B-16E-Instruct&nonce=52dbc8a021e26042dd02fcbc87b6f37cf9463aa6189fb8cc9733c83c5a02599b&signing_algo=ecdsa&include_tls_fingerprint=true`
+- **`deepseek-ai/DeepSeek-V3-0324`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=deepseek-ai%2FDeepSeek-V3-0324&nonce=38d93fc4390146d936d2c12837541684c104d0f9f8ee53d1f44696a78c372bcd&signing_algo=ecdsa&include_tls_fingerprint=true`
+- **`meta-llama/Llama-4-Scout-17B-16E-Instruct`** — `exception: 503 Server Error: Service Unavailable for url: https://cloud-api.near.ai/v1/attestation/report?model=meta-llama%2FLlama-4-Scout-17B-16E-Instruct&nonce=c2234269de39f766b237f94a5aa60fdefdd55d350632417356b3494fd8f68ea9&signing_algo=ecdsa&include_tls_fingerprint=true`
 
 </details>
 
-## redpill: 6 / 6 pass
+## redpill: 5 / 6 pass
 
 | Model | Verdict | Shape | Signing address | TCB | GPU | Latency |
 |-------|:-------:|-------|-----------------|-----|-----|--------:|
-| `phala/gpt-oss-20b` | ✅ | `tdx+gpu` | `0x3B65B57A…` | — | 🟢 | 3.02s |
-| `phala/gpt-oss-120b` | ✅ | `tdx+gpu` | `cb6fc58f6b…` | — | 🟢 | 3.25s |
-| `phala/qwen-2.5-7b-instruct` | ✅ | `tdx+gpu` | `0xc4045be3…` | — | 🟢 | 2.78s |
-| `phala/glm-4.7` | ✅ | `tdx+gpu` | `cb6fc58f6b…` | — | 🟢 | 3.14s |
-| `phala/deepseek-v3.2` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 31.06s |
-| `phala/kimi-k2.5` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 85.41s |
+| `phala/gpt-oss-20b` | ✅ | `tdx+gpu` | `0x3B65B57A…` | — | 🟢 | 1.9s |
+| `phala/gpt-oss-120b` | ❌ | `tdx+gpu` | — | — | — | 2.08s |
+| `phala/qwen-2.5-7b-instruct` | ✅ | `tdx+gpu` | `0xc4045be3…` | — | 🟢 | 2.28s |
+| `phala/glm-4.7` | ✅ | `tdx+gpu` | `cb6fc58f6b…` | — | 🟢 | 2.7s |
+| `phala/deepseek-v3.2` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 30.73s |
+| `phala/kimi-k2.5` | ✅ | `chutes+tdx` | 5 instances | n/a | n/a | 82.28s |
+
+<details><summary>1 failure(s) — expand</summary>
+
+- **`phala/gpt-oss-120b`** — `TDX quote verification failed: ppid=ca98bce2d0f6c53afd2a37537fcc3c3a tcb_svn=0b010200000000000000000000000000`
+
+</details>
 
 ## What's verified per row
 
