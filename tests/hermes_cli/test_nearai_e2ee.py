@@ -195,6 +195,9 @@ def _near_api_key():
 def _redpill_api_key():
     return os.environ.get("REDPILL_API_KEY", "") or _read_env_file(os.path.expanduser("~/.hermes-near-test/.env"), "REDPILL_API_KEY")
 
+def _venice_api_key():
+    return os.environ.get("VENICE_API_KEY", "") or _read_env_file(os.path.expanduser("~/.hermes-near-test/.env"), "VENICE_API_KEY")
+
 
 @pytest.mark.skipif(not _near_api_key(), reason="NEAR_API_KEY not found — live attestation test skipped")
 class TestNearAILiveAttestation:
@@ -233,6 +236,122 @@ class TestRedpillLiveAttestation:
         msg = data["choices"][0]["message"]
         response_text = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning")
         assert response_text, f"No response text in message fields: {list(msg.keys())}"
+
+
+# ---------------------------------------------------------------------------
+# Venice live attestation + full E2EE chat roundtrip
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _venice_api_key(), reason="VENICE_API_KEY not found — live Venice test skipped")
+class TestVeniceLiveAttestation:
+    MODEL = "e2ee-qwen3-5-122b-a10b"
+    BASE_URL = "https://api.venice.ai/api/v1"
+
+    def test_full_attestation_returns_signing_key(self):
+        from hermes_cli.attestation import verify_attestation
+        report = verify_attestation(
+            "venice",
+            {"api_key": _venice_api_key(), "base_url": self.BASE_URL, "model": self.MODEL},
+            {"enabled": True, "strict": True},
+        )
+        assert report.valid, f"Attestation failed: {report.error}"
+        assert report.signing_public_key is not None
+        # Venice returns the uncompressed key with the 04 prefix (65 bytes); other providers strip it (64).
+        assert len(bytes.fromhex(report.signing_public_key)) in (64, 65)
+        assert report.signing_algo in ("ecdsa", "ed25519")
+
+    def test_e2ee_chat_roundtrip(self):
+        """Full E2EE chat through VeniceE2EETransport — encrypts prompt, decrypts reply."""
+        import httpx as _httpx
+        from hermes_cli.attestation import verify_attestation
+        from hermes_cli.e2ee_transport import VeniceE2EETransport
+
+        api_key = _venice_api_key()
+        report = verify_attestation(
+            "venice",
+            {"api_key": api_key, "base_url": self.BASE_URL, "model": self.MODEL},
+            {"enabled": True, "strict": True},
+        )
+        assert report.valid, f"Attestation failed: {report.error}"
+
+        transport = VeniceE2EETransport(
+            report.signing_public_key, report.signing_algo or "ecdsa",
+            inner=_httpx.HTTPTransport(),
+        )
+        with _httpx.Client(
+            transport=transport, base_url=self.BASE_URL, timeout=120.0,
+            headers={"Authorization": f"Bearer {api_key}"},
+        ) as client:
+            resp = client.post(
+                "/chat/completions",
+                json={
+                    "model": self.MODEL,
+                    "messages": [{"role": "user", "content": "reply with a single word: pong"}],
+                    "max_tokens": 20,
+                    "stream": False,
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        content = resp.json()["choices"][0]["message"].get("content", "")
+        assert content, f"No decrypted content returned"
+
+
+# ---------------------------------------------------------------------------
+# NEAR AI live E2EE chat roundtrip (picks a model that currently passes attestation)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _near_api_key(), reason="NEAR_API_KEY not found — live near-ai E2EE test skipped")
+class TestNearAILiveE2EEChat:
+    BASE_URL = "https://cloud-api.near.ai"
+
+    def test_e2ee_chat_roundtrip(self):
+        """Probe near-ai models, pick one that passes GPU attestation, run E2EE chat through it."""
+        import httpx as _httpx
+        from hermes_cli.attestation import verify_attestation, probe_models_for_provider
+        from hermes_cli.e2ee_transport import E2EETransport
+        from hermes_cli.models import _PROVIDER_MODELS
+
+        api_key = _near_api_key()
+        candidates = _PROVIDER_MODELS.get("near-ai", [])
+        assert candidates, "near-ai has no curated models"
+        passing = probe_models_for_provider(
+            "near-ai", api_key, self.BASE_URL, candidates,
+            {"enabled": True, "strict": True},
+        )
+        if not passing:
+            pytest.skip("No near-ai models currently pass GPU attestation")
+        model = passing[0]
+
+        report = verify_attestation(
+            "near-ai",
+            {"api_key": api_key, "base_url": self.BASE_URL, "model": model},
+            {"enabled": True, "strict": True},
+        )
+        assert report.valid and report.signing_public_key
+
+        transport = E2EETransport(
+            report.signing_public_key, report.signing_algo or "ecdsa",
+            inner=_httpx.HTTPTransport(),
+        )
+        with _httpx.Client(
+            transport=transport, base_url=self.BASE_URL, timeout=120.0,
+            headers={"Authorization": f"Bearer {api_key}"},
+        ) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "reply with a single word: pong"}],
+                    "max_tokens": 20,
+                    "stream": False,
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        msg = resp.json()["choices"][0]["message"]
+        content = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning")
+        assert content, f"No decrypted content in fields: {list(msg.keys())}"
 
 
 # ---------------------------------------------------------------------------
