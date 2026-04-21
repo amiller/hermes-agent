@@ -17,26 +17,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, os.environ.get("NEARAI_VERIFIER_PATH", ""))
 
-# Diagnostic — show whether the vendored verifier actually imports on this host.
-_verifier_path = os.environ.get("NEARAI_VERIFIER_PATH", "(unset)")
-print(f"NEARAI_VERIFIER_PATH={_verifier_path}", flush=True)
-print(f"dcap_qvl importable: ", end="", flush=True)
-try:
-    import dcap_qvl  # noqa: F401
-    print("yes", flush=True)
-except Exception as _e:
-    print(f"no ({_e})", flush=True)
-sys.path.insert(0, _verifier_path)
-print("model_verifier importable: ", end="", flush=True)
-try:
-    import model_verifier  # noqa: F401
-    print("yes", flush=True)
-except Exception as _e:
-    print(f"no ({type(_e).__name__}: {_e})", flush=True)
-
-from hermes_cli.attestation import verify_attestation, _VERIFIER_AVAILABLE  # noqa: E402
-print(f"_VERIFIER_AVAILABLE={_VERIFIER_AVAILABLE}", flush=True)
+from hermes_cli.attestation import verify_attestation  # noqa: E402
 
 NEAR_MODELS = [
     "openai/gpt-oss-120b",
