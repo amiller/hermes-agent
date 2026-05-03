@@ -52,6 +52,8 @@ _HERMES_CORE_TOOLS = [
     "session_search",
     # Clarifying questions
     "clarify",
+    # TEE attestation introspection (no-op for non-attested providers)
+    "attestation_status",
     # Code execution + delegation
     "execute_code", "delegate_task",
     # Cronjob management
@@ -189,6 +191,12 @@ TOOLSETS = {
     "clarify": {
         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
         "tools": ["clarify"],
+        "includes": []
+    },
+
+    "attestation": {
+        "description": "Introspect TEE attestation state for verified-inference providers (near-ai, redpill, venice)",
+        "tools": ["attestation_status"],
         "includes": []
     },
     

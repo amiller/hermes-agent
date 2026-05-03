@@ -213,7 +213,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
     nonce = secrets.token_hex(32)
     url = f"{base_url}/v1/attestation/report"
     params = {"model": model, "nonce": nonce, "signing_algo": "ecdsa", "include_tls_fingerprint": "true"}
-    response = requests.get(url, params=params, headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
+    response = requests.get(url, params=params, headers={"Authorization": f"Bearer {api_key}"}, timeout=60)
     response.raise_for_status()
     report = response.json()
     verifier_out = ""
@@ -293,21 +293,32 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             m_rd = check_report_data(model_att, nonce, m_intel)
         verifier_out += buf_m2.getvalue()
 
+        backend_id = (
+            f"signing_address={model_att.get('signing_address','?')[:10]}… "
+            f"app_id={model_att.get('info',{}).get('app_id','?')[:10]}…"
+        )
+
         if not m_rd.get("binds_address"):
-            return _fail(f"Model attestation #{i+1} report_data does not bind signing address + nonce")
+            return _fail(f"Model attestation #{i+1} ({backend_id}) report_data does not bind signing address + nonce")
         if not m_rd.get("embeds_nonce"):
-            return _fail(f"Model attestation #{i+1} report_data does not embed request nonce")
+            return _fail(f"Model attestation #{i+1} ({backend_id}) report_data does not embed request nonce")
 
         if not model_att.get("nvidia_payload"):
-            return _fail(f"Model attestation #{i+1} missing nvidia_payload — GPU attestation required")
+            return _fail(f"Model attestation #{i+1} ({backend_id}) missing nvidia_payload — GPU attestation required")
         buf_m3 = io.StringIO()
         with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf_m3):
             gpu_result = check_gpu(model_att, nonce)
         verifier_out += buf_m3.getvalue()
         if gpu_result.get("verdict") not in ("PASS", True):
-            return _fail(f"Model attestation #{i+1} GPU verification failed: {gpu_result.get('verdict')}")
+            nras_detail = _capture_nras_failure_detail(model_att.get("nvidia_payload", ""))
+            return _fail(
+                f"Model attestation #{i+1} ({backend_id}) GPU NRAS verdict={gpu_result.get('verdict')!r} "
+                f"(nonce_matches={gpu_result.get('nonce_matches')}); "
+                f"NRAS claims: {_json.dumps(nras_detail, default=str)}. "
+                f"Try `model: openai/gpt-oss-120b` or `zai-org/GLM-5.1-FP8` to isolate fleet vs service."
+            )
         if not gpu_result.get("nonce_matches"):
-            return _fail(f"Model attestation #{i+1} GPU nonce mismatch")
+            return _fail(f"Model attestation #{i+1} ({backend_id}) GPU nonce mismatch — replay or stale evidence")
 
         # compose hash for model CVM
         info = model_att.get("info", {})
@@ -375,12 +386,34 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
     )
 
 
-def _decode_nvidia_verdict(jwt_token: str) -> str:
-    """Extract x-nvidia-overall-att-result from a NRAS JWT response."""
+def _decode_nvidia_jwt_claims(jwt_token: str) -> dict:
+    """Decode a NRAS JWT and return its full claims dict."""
     payload_b64 = jwt_token.split(".")[1]
     padded = payload_b64 + "=" * ((4 - len(payload_b64) % 4) % 4)
-    payload = _json.loads(base64.urlsafe_b64decode(padded).decode())
-    return payload.get("x-nvidia-overall-att-result", "UNKNOWN")
+    return _json.loads(base64.urlsafe_b64decode(padded).decode())
+
+
+def _decode_nvidia_verdict(jwt_token: str) -> str:
+    """Extract x-nvidia-overall-att-result from a NRAS JWT response."""
+    return _decode_nvidia_jwt_claims(jwt_token).get("x-nvidia-overall-att-result", "UNKNOWN")
+
+
+def _capture_nras_failure_detail(nvidia_payload_str: str) -> dict:
+    """Replay the NRAS POST and return full JWT claims so the caller can surface
+    the specific reason NVIDIA rejected the GPU evidence (driver mismatch, stale
+    measurement, signature, etc.). Returns {} if replay itself fails."""
+    try:
+        payload = _json.loads(nvidia_payload_str)
+        resp = requests.post(_NVIDIA_NRAS, json=payload, timeout=30).json()
+        jwt_token = resp[0][1]
+        claims = _decode_nvidia_jwt_claims(jwt_token)
+        detail_keys = {
+            k: v for k, v in claims.items()
+            if k.startswith("x-nvidia-") and k != "x-nvidia-eat-ver"
+        }
+        return detail_keys
+    except Exception as e:
+        return {"_replay_error": str(e)}
 
 
 def _phala_check_report_data(report_data_hex: str, signing_address: str, signing_algo: str, nonce: str) -> bool:
