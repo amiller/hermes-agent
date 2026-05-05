@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned reference values for NEAR AI Cloud TEE backends (mainnet). Captured 2026-05-05 from https://cloud-api.near.ai/v1/attestation/report. The Base on-chain DstackKms/DstackApp registries are the authoritative source for app_id/compose_hash/os_image_hash/kms_pubkey; until hermes ships an RPC reader (Block B), we pin known-good values here. Refresh on operator rotation. Source captures: case-studies/near-ai-private-inference/sources/.",
+  "_comment": "Pinned reference values for NEAR AI Cloud TEE backends (mainnet). Captured 2026-05-05 from https://cloud-api.near.ai/v1/attestation/report. The Base on-chain DstackKms/DstackApp registries are the authoritative source for app_id/compose_hash/os_image_hash/kms_pubkey; until hermes ships an RPC reader (Block B), we pin known-good values here. inner_yaml pins the inner compose closure (Block C) — without it the operator can swap the inner YAML in nearai/cvm-compose-files (which is fetched at runtime by compose-manager and NOT in the outer compose_hash measurement) and exfiltrate prompts on the same signing key. Refresh on operator rotation. Source captures: case-studies/near-ai-private-inference/sources/.",
   "captured_at": "2026-05-05",
   "kms_contract_addr": "0x8fa1593fac104c1aa0c59eaa3553f7e3e162d637",
   "kms_provider_info_id": "3059301306072a8648ce3d020106082a8648ce3d03010703420004228f800590a10442cba9d0e6adb2fa9f195eea9e75e23dd35990d52b59dda2415a63674c38adebde4ffd4d4b265bf818985933820c8053cee3ce29b5fb0fbcbc",
@@ -8,24 +8,44 @@
   ],
   "models": {
     "zai-org/GLM-5.1-FP8": {
-      "_note": "two compose hashes observed within ~30min on 2026-05-05 — operator rotated compose on the same backend (same signing_address) without key rotation. Both kept until clarified.",
+      "_note": "Outer compose_hash rotated within ~30min on 2026-05-05 from 0x700adbf5… → 0x242a6272… on the same signing_address — operator can rotate compose without rotating signing keys. Both kept until clarified.",
       "app_id": "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b",
       "compose_hashes": [
         "700adbf53ad4a14e58d2eae65776d451b914b1f5d377c20c7a4e6cca681446ec",
         "242a62724303cc32f364da0fc92738706b0078e7587821b7ba3e75488223797b"
-      ]
+      ],
+      "inner_yaml": {
+        "file": "GLM-5.1.yaml",
+        "commits": [
+          "cc38dabcfac34b6d3873111e33df4ba5e6cc73cf"
+        ],
+        "file_sha256s": [
+          "3ac0d022eb5d2a135e1727cb3552f11101f6c00e3d9da687aa93fb09e33979cb"
+        ]
+      }
     },
     "deepseek-ai/DeepSeek-V3.1": {
+      "_status": "model substitution observed 2026-05-05: requesting deepseek-ai/DeepSeek-V3.1 returns model_name=Qwen/Qwen3.5-122B-A10B (file=Qwen3.5-122B.yaml). Hermes' model_name check (added in this PR) fails closed on this. inner_yaml left empty until DeepSeek-V3.1 is restored to its own backend.",
       "app_id": "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b",
       "compose_hashes": [
         "242a62724303cc32f364da0fc92738706b0078e7587821b7ba3e75488223797b"
       ]
     },
     "openai/gpt-oss-120b": {
+      "_note": "Inner YAML is small-models.yaml — a multi-model compose hosting gpt-oss-120b alongside qwen3-30b/qwen3-vl/qwen3-embeddings/qwen3-reranker/whisper3-large/flux. Each model gets its own vllm-proxy-* service in one CVM. MODEL_NAME env per service determines KMS-derived signing key.",
       "app_id": "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b",
       "compose_hashes": [
         "242a62724303cc32f364da0fc92738706b0078e7587821b7ba3e75488223797b"
-      ]
+      ],
+      "inner_yaml": {
+        "file": "small-models.yaml",
+        "commits": [
+          "105dc607b8eb12209955a97fd84f06caf196a781"
+        ],
+        "file_sha256s": [
+          "148a8ceb82b66c8c40d1ee2bdf95c75bcf1cdbf4869e556e253069057f6cb21a"
+        ]
+      }
     }
   }
 }

@@ -26,6 +26,37 @@ logger = logging.getLogger(__name__)
 
 _NEARAI_ANCHOR = load_nearai_anchor()
 
+
+def _extract_cm_td_measurements(quote_hex: str):
+    """Decode the compose-manager TDX quote and return (mr_td, rt_mr3) hex strings.
+
+    Factored out so tests can patch this without standing up a real dcap_qvl.
+    Production path uses the vendored dcap_qvl from nearai-cloud-verifier.
+    """
+    import dcap_qvl as _dcap_qvl  # vendored via NEARAI_VERIFIER_PATH
+
+    q_bytes = bytes.fromhex(quote_hex)
+    coro = _dcap_qvl.get_collateral_and_verify(q_bytes)
+    try:
+        import asyncio as _asyncio
+        try:
+            _asyncio.get_running_loop()
+            from concurrent.futures import ThreadPoolExecutor as _Pool
+            def _w():
+                _l = _asyncio.new_event_loop()
+                try:
+                    return _l.run_until_complete(_dcap_qvl.get_collateral_and_verify(q_bytes))
+                finally:
+                    _l.close()
+            with _Pool(max_workers=1) as _e:
+                result = _e.submit(_w).result()
+        except RuntimeError:
+            result = _asyncio.run(coro)
+    finally:
+        pass
+    td10 = (_json.loads(result.to_json()).get("report") or {}).get("TD10") or {}
+    return td10.get("mr_td", ""), td10.get("rt_mr3", "")
+
 _PHALA_TDX_VERIFIER = "https://cloud-api.phala.network/api/v1/attestations/verify"
 _NVIDIA_NRAS = "https://nras.attestation.nvidia.com/v3/attest/gpu"
 
@@ -324,6 +355,18 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
         if not gpu_result.get("nonce_matches"):
             return _fail(f"Model attestation #{i+1} ({backend_id}) GPU nonce mismatch — replay or stale evidence")
 
+        # Returned model_name must match requested model. NEAR's gateway can silently
+        # route a model request to a different backend (observed 2026-05-05:
+        # deepseek-ai/DeepSeek-V3.1 → Qwen/Qwen3.5-122B-A10B). The signing key is bound
+        # to (app_id, MODEL_NAME) where MODEL_NAME is set in the inner compose, so a
+        # mismatched model_name means we'd be encrypting to a different model's TD key.
+        returned_model_name = model_att.get("model_name", "")
+        if returned_model_name and returned_model_name != model:
+            return _fail(
+                f"Model attestation #{i+1} ({backend_id}) reports model_name={returned_model_name!r} "
+                f"but client requested {model!r} — silent model substitution; refusing"
+            )
+
         # compose hash for model CVM
         info = model_att.get("info", {})
         tcb_info = info.get("tcb_info", {})
@@ -385,6 +428,118 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
                 f"got sha256={hashlib.sha256(bytes.fromhex(attested_kpi_id)).hexdigest()[:16] if attested_kpi_id else '<none>'}…)"
             )
 
+        # Block C-static: enforce inner-compose pinning. The outer compose only
+        # measures compose-manager + datadog + certbot — it does NOT cover the inner
+        # YAML that compose-manager fetches at runtime from nearai/cvm-compose-files.
+        # Without this check, the operator can swap the inner YAML (commit + image
+        # digests) without changing any outer-pin field, decrypt prompts on the same
+        # KMS-derived signing key, and exfiltrate.
+        inner_anchor = expected.get("inner_yaml")
+        if inner_anchor:
+            cm = model_att.get("compose_manager_attestation") or {}
+            if not cm:
+                return _fail(
+                    f"Model #{i+1} ({backend_id}) missing compose_manager_attestation — "
+                    f"cannot verify inner compose for {model!r}"
+                )
+
+            # Run the same Intel TDX verifier on compose-manager's quote, then
+            # reach past check_tdx_quote (which only surfaces reportdata + mrconfig)
+            # via a direct dcap_qvl call to extract mr_td and rt_mr3 for cross-TD binding.
+            buf_cm = io.StringIO()
+            with _STDOUT_CAPTURE_LOCK, contextlib.redirect_stdout(buf_cm):
+                cm_intel = _sync_run(check_tdx_quote({"intel_quote": cm.get("quote", "")}))
+            verifier_out += buf_cm.getvalue()
+            if not cm_intel or not cm_intel.get("verified", False):
+                return _fail(f"Model #{i+1} compose_manager_attestation TDX quote verification failed")
+
+            try:
+                cm_mrtd, cm_rtmr3 = _extract_cm_td_measurements(cm.get("quote", ""))
+            except Exception as exc:
+                return _fail(f"Model #{i+1} compose_manager dcap_qvl decode failed: {type(exc).__name__}: {exc}")
+
+            outer_mrtd = (tcb_info.get("mrtd") or "").lower()
+            outer_rtmr3 = (tcb_info.get("rtmr3") or "").lower()
+            cm_mrtd = (cm_mrtd or "").lower()
+            cm_rtmr3 = (cm_rtmr3 or "").lower()
+            if not cm_mrtd or cm_mrtd != outer_mrtd:
+                return _fail(
+                    f"Model #{i+1} compose_manager mr_td {cm_mrtd[:16]}… != model-attestation mrtd "
+                    f"{outer_mrtd[:16]}… — different TD images"
+                )
+            if not cm_rtmr3 or cm_rtmr3 != outer_rtmr3:
+                return _fail(
+                    f"Model #{i+1} compose_manager rt_mr3 {cm_rtmr3[:16]}… != model-attestation rtmr3 "
+                    f"{outer_rtmr3[:16]}… — quotes from different TD instances or non-simultaneous "
+                    f"(parallel-TD attack or stale capture)"
+                )
+
+            actions_hash = (cm.get("actions_hash") or "").lower()
+            cm_nonce = (cm.get("nonce") or "").lower()
+            cm_body = cm_intel.get("quote", {}).get("body", {}) or {}
+            cm_report_data = (cm_body.get("reportdata") or "").lower()
+            if cm_report_data[:64] != actions_hash:
+                return _fail(
+                    f"Model #{i+1} compose_manager report_data[0:32] {cm_report_data[:64]!r} != "
+                    f"actions_hash {actions_hash!r} — actions log not hardware-bound"
+                )
+            if cm_report_data[64:128] != cm_nonce:
+                return _fail(
+                    f"Model #{i+1} compose_manager report_data[32:64] != echoed nonce — "
+                    f"freshness binding broken"
+                )
+            if cm_nonce != nonce.lower():
+                return _fail(
+                    f"Model #{i+1} compose_manager nonce {cm_nonce[:16]}… != requested nonce "
+                    f"{nonce[:16]}… — replay or stale capture"
+                )
+
+            actions = cm.get("actions") or []
+            if not actions:
+                return _fail(
+                    f"Model #{i+1} compose_manager actions=[] — log was wiped (compose-manager "
+                    f"restarted without a subsequent compose_up); cannot verify what's currently running"
+                )
+            expected_file = inner_anchor["file"]
+            relevant = [
+                a for a in actions
+                if a.get("file") == expected_file and a.get("action") in ("compose_up", "compose_down")
+            ]
+            if not relevant:
+                return _fail(
+                    f"Model #{i+1} no compose_up/compose_down for expected file {expected_file!r} "
+                    f"in compose-manager actions log — wrong inner YAML deployed"
+                )
+            latest = max(relevant, key=lambda a: a.get("timestamp", ""))
+            if latest.get("action") == "compose_down":
+                return _fail(
+                    f"Model #{i+1} latest action for {expected_file!r} is compose_down "
+                    f"(@ {latest.get('timestamp')}) — file is not currently deployed"
+                )
+
+            actual_commit = latest.get("commit", "")
+            actual_sha = latest.get("file_sha256", "")
+            allowed_commits = set(inner_anchor.get("commits", []))
+            allowed_shas = set(inner_anchor.get("file_sha256s", []))
+            if actual_commit not in allowed_commits:
+                return _fail(
+                    f"Model #{i+1} inner_yaml commit {actual_commit!r} not in anchored commits "
+                    f"{sorted(allowed_commits)} for {expected_file!r}"
+                )
+            if actual_sha not in allowed_shas:
+                return _fail(
+                    f"Model #{i+1} inner_yaml file_sha256 {actual_sha!r} not in anchored "
+                    f"file_sha256s {sorted(allowed_shas)} for {expected_file!r}"
+                )
+        elif "inner_yaml" not in expected:
+            # Anchor lacks inner_yaml for this model. In strict mode, this is a fail
+            # (we can't verify the inner compose). Models being onboarded with no
+            # inner_yaml yet should be caught here rather than silently passing.
+            return _fail(
+                f"Model {model!r} has no inner_yaml in hermes_cli/anchors/nearai_mainnet.json — "
+                f"cannot verify inner compose closure (Block C). Add inner_yaml.{{file, commits, file_sha256s}} or remove the model entry."
+            )
+
         # verify signing_public_key derives to signing_address (so we know the E2EE key is hardware-bound)
         spk = model_att.get("signing_public_key")
         signing_addr = model_att.get("signing_address", "")
@@ -407,7 +562,7 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
         if m_status == "OutOfDate":
             logger.warning("Model attestation #%d platform TCB is OutOfDate (advisories: %s) — quote is valid but firmware is unpatched", i + 1, ", ".join(m_advisories) or "none")
 
-        model_details.append({
+        details_entry = {
             "signing_address": signing_addr,
             "app_id": info.get("app_id"),
             "compose_hash": compose_hash,
@@ -417,7 +572,15 @@ def _verify_near_ai_attestation(runtime_creds: Dict[str, Any], config: Dict[str,
             "compose_hash_verified": compose_verified,
             "anchor_matched": True,
             "gpu_verdict": gpu_result.get("verdict"),
-        })
+            "model_name": returned_model_name,
+        }
+        if inner_anchor:
+            details_entry["inner_yaml"] = {
+                "file": expected_file,
+                "commit": actual_commit,
+                "file_sha256": actual_sha,
+            }
+        model_details.append(details_entry)
 
     return AttestationReport(
         valid=True, provider="near-ai", attestation_type="tdx+gpu",
