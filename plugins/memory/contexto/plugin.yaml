@@ -1,0 +1,5 @@
+name: contexto
+version: 0.1.0
+description: "Self-hosted Contexto cognitive memory — episodic/semantic/procedural recall via the OSS memory engine."
+pip_dependencies:
+  - "contexto @ git+https://github.com/amiller/contexto.git#subdirectory=clients/python"
